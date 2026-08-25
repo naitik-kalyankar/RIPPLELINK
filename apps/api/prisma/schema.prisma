@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CreatorDetectionStatus {
+  detected
+  mapped
+  unknown
+  failed
+}
+
+enum SubmissionAttemptStatus {
+  ready
+  uploading
+  uploaded
+  failed
+  already_linked
+}
+
+enum ActivityLogLevel {
+  info
+  warning
+  error
+}
+
+model InstagramAccount {
+  id          String  @id @default(cuid())
+  instagramId String  @unique
+  username    String
+  displayName String?
+  active      Boolean @default(true)
+
+  // Per-account Instagram Graph API credential — each Instagram Business account's access
+  // token is scoped to whichever account it was generated for, so a single global token
+  // (the original design) can't serve more than one account. Never serialized to the
+  // frontend — see routes/instagram.ts. (No appId field: it's never used to make requests,
+  // only the token is — /me and /media calls are authenticated by accessToken alone.)
+  accessToken String?
+
+  // CLIPPING's own internal ID for the social media account this Instagram account is
+  // registered as on their side — required by their submit endpoint, and (like accessToken)
+  // genuinely different per Instagram account, not a single global value. Not a secret
+  // (unlike accessToken/the session cookie), so it's fine to include in API responses.
+  clippingAccountId String?
+
+  // Which CLIPPING login (Supabase account, identified by email) this Instagram account is
+  // registered under on CLIPPING's side — CLIPPING accounts each have their own separate set
+  // of linked Instagram accounts. Manually set for now (no reliable way yet to auto-discover
+  // it — see clippingIdentity.ts for the "currently active in browser" half of this, which is
+  // auto-detected). Not a secret.
+  clippingOwnerEmail String?
+
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  reels Reel[]
+
+  @@map("instagram_accounts")
+}
+
+model Creator {
+  id                 String   @id @default(cuid())
+  detectedIdentifier String   @unique
+  displayName        String
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  aliases CreatorAlias[]
+  reels   Reel[]
+
+  @@map("creators")
+}
+
+model CreatorAlias {
+  id                 String   @id @default(cuid())
+  creatorId          String
+  detectedIdentifier String   @unique
+  createdAt          DateTime @default(now())
+
+  creator Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@map("creator_aliases")
+}
+
+model Reel {
+  id                     String                  @id @default(cuid())
+  instagramAccountId     String
+  instagramReelId        String
+  instagramUrl           String
+  thumbnailUrl           String
+  publishedAt            DateTime?
+  views                  Int?
+  creatorId              String?
+  detectedIdentifier     String?
+  creatorDetectionStatus CreatorDetectionStatus  @default(unknown)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  instagramAccount   InstagramAccount    @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  creator            Creator?            @relation(fields: [creatorId], references: [id])
+  clippingSubmission ClippingSubmission?
+  submissionAttempts SubmissionAttempt[]
+
+  @@unique([instagramAccountId, instagramReelId])
+  @@index([creatorDetectionStatus])
+  @@index([publishedAt])
+  @@map("reels")
+}
+
+// Real bounty tags/rates/active-state, learned by the browser extension scraping CLIPPING's
+// own campaign page (there's no API for this) — used to auto-correct OCR'd creator
+// identifiers to a real tag name before submitting (see BountyMatchingService), and to avoid
+// ever assigning a disabled bounty.
+model ClippingBounty {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  active     Boolean  @default(true)
+  rate       String?
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("clipping_bounties")
+}
+
+model ClippingSubmission {
+  id              String    @id @default(cuid())
+  reelId          String?   @unique
+  clippingClipId  String    @unique
+  videoId         String
+  campaignId      String?
+  bountyTag       String?
+  clippingUrl     String?
+  status          String    @default("submitted")
+  isBeingTracked  Boolean   @default(true)
+  views           Int?
+  likes           Int?
+  comments        Int?
+  dateAdded       DateTime?
+  dateCreated     DateTime?
+  lastUpdated     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  reel Reel? @relation(fields: [reelId], references: [id])
+
+  @@index([videoId])
+  @@map("clipping_submissions")
+}
+
+model SubmissionAttempt {
+  id           String                   @id @default(cuid())
+  reelId       String
+  status       SubmissionAttemptStatus
+  errorMessage String?
+  attemptedAt  DateTime                 @default(now())
+
+  reel Reel @relation(fields: [reelId], references: [id], onDelete: Cascade)
+
+  @@index([reelId])
+  @@map("submission_attempts")
+}
+
+model ActivityLog {
+  id        String           @id @default(cuid())
+  message   String
+  level     ActivityLogLevel @default(info)
+  createdAt DateTime         @default(now())
+
+  @@index([createdAt])
+  @@map("activity_logs")
+}

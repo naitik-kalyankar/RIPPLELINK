@@ -1,0 +1,88 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        width: 280px;
+        padding: 16px;
+        background: #0f1420;
+        color: #e5e7eb;
+      }
+      h1 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      p.sub {
+        font-size: 12px;
+        color: #9ca3af;
+        margin: 0 0 12px;
+        line-height: 1.4;
+      }
+      .status {
+        font-size: 12px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        line-height: 1.4;
+      }
+      .status.success {
+        background: rgba(34, 197, 94, 0.15);
+        color: #4ade80;
+      }
+      .status.error {
+        background: rgba(239, 68, 68, 0.15);
+        color: #f87171;
+      }
+      .status.no_cookie {
+        background: rgba(234, 179, 8, 0.15);
+        color: #facc15;
+      }
+      .status.refreshing {
+        background: rgba(109, 95, 240, 0.15);
+        color: #a5b4fc;
+      }
+      .status.unknown {
+        background: rgba(148, 163, 184, 0.15);
+        color: #94a3b8;
+      }
+      button {
+        width: 100%;
+        padding: 8px;
+        border-radius: 6px;
+        border: none;
+        background: #6d5ff0;
+        color: white;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      button.secondary {
+        background: transparent;
+        border: 1px solid #2a3040;
+        margin-top: 8px;
+      }
+      hr {
+        border: none;
+        border-top: 1px solid #232a3c;
+        margin: 14px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>CLIPPING Cookie Sync</h1>
+    <p class="sub">Keeps Reel Manager's CLIPPING_SESSION_COOKIE current automatically whenever it changes.</p>
+    <div id="status" class="status unknown">Checking…</div>
+    <button id="sync-now">Sync Now</button>
+    <hr />
+    <p class="sub">Read mode is always on: it passively logs the shape of clipping.net's own API calls (never modifies anything) so we can see what data is actually available.</p>
+    <button class="secondary" id="open-read-mode">View captured data</button>
+    <script src="popup.js"></script>
+  </body>
+</html>

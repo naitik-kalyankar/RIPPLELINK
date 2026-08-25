@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env*
+!.env.example
+*.log
+.DS_Store
+apps/desktop/src-tauri/target/
+apps/api/prisma/dev.db
+coverage/

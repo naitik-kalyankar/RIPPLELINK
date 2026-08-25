@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 97.5%;
+    --foreground: 222 47% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 12%;
+    --primary: 245 70% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 16% 93%;
+    --secondary-foreground: 222 47% 12%;
+    --muted: 220 16% 93%;
+    --muted-foreground: 220 9% 42%;
+    --accent: 220 16% 93%;
+    --accent-foreground: 222 47% 12%;
+    --destructive: 0 72% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 65% 38%;
+    --success-foreground: 0 0% 100%;
+    --warning: 32 90% 45%;
+    --warning-foreground: 0 0% 100%;
+    --border: 220 14% 89%;
+    --input: 220 14% 89%;
+    --ring: 245 70% 58%;
+    --radius: 20px;
+  }
+
+  .dark {
+    --background: 224 26% 7%;
+    --foreground: 210 15% 92%;
+    --card: 224 22% 10%;
+    --card-foreground: 210 15% 92%;
+    --popover: 224 22% 11%;
+    --popover-foreground: 210 15% 92%;
+    --primary: 245 55% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 18% 15%;
+    --secondary-foreground: 210 15% 92%;
+    --muted: 222 18% 15%;
+    --muted-foreground: 217 10% 64%;
+    --accent: 222 18% 17%;
+    --accent-foreground: 210 15% 92%;
+    --destructive: 0 65% 56%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 142 38% 45%;
+    --success-foreground: 224 24% 8%;
+    --warning: 36 80% 54%;
+    --warning-foreground: 24 10% 10%;
+    --border: 222 16% 18%;
+    --input: 222 16% 18%;
+    --ring: 245 55% 60%;
+    --radius: 20px;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    @apply bg-primary/30;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+  }
+}

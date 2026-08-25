@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Reel Manager — CLIPPING Cookie Sync",
+  "version": "1.7.0",
+  "description": "Watches your CLIPPING session cookie and pushes it to your local Reel Manager app automatically, so you never have to copy/paste it from devtools by hand.",
+  "permissions": ["cookies", "storage", "alarms", "tabs"],
+  "host_permissions": ["https://clipping.net/*", "http://localhost:4000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://clipping.net/*"],
+      "js": ["inject.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://clipping.net/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CLIPPING Cookie Sync"
+  }
+}
