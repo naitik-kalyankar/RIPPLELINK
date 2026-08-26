@@ -7,9 +7,11 @@ import { reelsRoutes } from "./routes/reels.js";
 import { creatorsRoutes } from "./routes/creators.js";
 import { instagramRoutes } from "./routes/instagram.js";
 import { clippingRoutes } from "./routes/clipping.js";
+import { clippingAccountsRoutes } from "./routes/clippingAccounts.js";
 import { syncRoutes } from "./routes/sync.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { integrationsRoutes } from "./routes/integrations.js";
+import { clippingBrowserManager } from "./services/clipping/ClippingBrowserManager.js";
 
 async function main() {
   const app = Fastify({ logger: true });
@@ -23,11 +25,13 @@ async function main() {
   await app.register(creatorsRoutes);
   await app.register(instagramRoutes);
   await app.register(clippingRoutes);
+  await app.register(clippingAccountsRoutes);
   await app.register(syncRoutes);
   await app.register(dashboardRoutes);
   await app.register(integrationsRoutes);
 
   app.addHook("onClose", async () => {
+    await clippingBrowserManager.shutdown();
     await prisma.$disconnect();
   });
 

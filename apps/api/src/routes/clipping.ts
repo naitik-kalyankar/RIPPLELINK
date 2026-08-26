@@ -10,6 +10,7 @@ import { syncService } from "../services/sync/SyncService.js";
 import { submissionService } from "../services/submissions/SubmissionService.js";
 import { hasRealClippingCredentials, env } from "../lib/env.js";
 import { updateEnvVar } from "../lib/envWriter.js";
+import { getClippingAccountHealth } from "../lib/integrationHealth.js";
 import { activityLogService } from "../services/activity/ActivityLogService.js";
 import {
   getActiveClippingIdentity,
@@ -19,13 +20,22 @@ import {
 
 export async function clippingRoutes(app: FastifyInstance) {
   app.get("/api/clipping/clips", async (request) => {
-    const { page = "1", limit = "20" } = request.query as { page?: string; limit?: string };
+    const { page = "1", limit = "20", instagramAccountIds } = request.query as {
+      page?: string;
+      limit?: string;
+      instagramAccountIds?: string;
+    };
     const pageNum = Number(page);
     const limitNum = Number(limit);
+    const ids = instagramAccountIds ? instagramAccountIds.split(",").filter(Boolean) : undefined;
+    // Same tradeoff as the dashboard payout calc: a submission with no linked Reel yet can't
+    // be attributed to any account, so it's excluded once scoped rather than shown anyway.
+    const where = ids ? { reel: { instagramAccountId: { in: ids } } } : {};
 
     const [total, items] = await Promise.all([
-      prisma.clippingSubmission.count(),
+      prisma.clippingSubmission.count({ where }),
       prisma.clippingSubmission.findMany({
+        where,
         orderBy: { dateAdded: "desc" },
         skip: (pageNum - 1) * limitNum,
         take: limitNum,
@@ -37,12 +47,13 @@ export async function clippingRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/clipping/status", async () => {
-    const [uploadedClips, lastLog] = await Promise.all([
+    const [uploadedClips, lastLog, accounts] = await Promise.all([
       prisma.clippingSubmission.count(),
       prisma.activityLog.findFirst({
         where: { message: { contains: "CLIPPING sync" } },
         orderBy: { createdAt: "desc" },
       }),
+      prisma.clippingAccount.findMany({ where: { active: true }, orderBy: { label: "asc" } }),
     ]);
     const live = hasRealClippingCredentials();
     return {
@@ -51,6 +62,23 @@ export async function clippingRoutes(app: FastifyInstance) {
       campaignId: env.clipping.campaignId ?? null,
       lastSyncAt: lastLog?.createdAt.toISOString() ?? null,
       uploadedClips,
+      // Populated once real ClippingAccount rows exist (multi-account/Playwright path);
+      // empty for a legacy/single-account install — the top-level fields above keep
+      // reflecting the legacy singleton either way, so existing consumers need no changes.
+      perAccount: accounts.map((account) => {
+        const health = getClippingAccountHealth(account.id);
+        return {
+          id: account.id,
+          label: account.label,
+          mode: "live" as const,
+          campaignId: account.campaignId,
+          healthy: health.lastError === null,
+          lastError: health.lastError,
+          lastSuccessAt: health.lastSuccessAt,
+          lastUsedAt: account.lastUsedAt?.toISOString() ?? null,
+          lastLoginAt: account.lastLoginAt?.toISOString() ?? null,
+        };
+      }),
     };
   });
 

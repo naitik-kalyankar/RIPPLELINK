@@ -19,7 +19,23 @@ export interface InstagramAccount {
   // Which CLIPPING login (by email) this Instagram account is registered under — manually
   // tagged for now. Not a secret.
   clippingOwnerEmail: string | null;
+  // Which ClippingAccount (real row, Playwright-backed session) this account is linked to.
+  // Additive alongside clippingOwnerEmail above — null means "use the legacy singleton".
+  clippingAccountRefId: string | null;
   lastSyncedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClippingAccount {
+  id: string;
+  label: string;
+  email: string | null;
+  apiUrl: string;
+  campaignId: string;
+  active: boolean;
+  lastUsedAt: string | null;
+  lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

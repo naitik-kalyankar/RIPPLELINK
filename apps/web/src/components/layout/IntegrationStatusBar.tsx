@@ -1,9 +1,11 @@
 import { useIntegrationsStatus } from "@/api/integrations";
+import { useClippingAccounts } from "@/api/clippingAccounts";
 import { formatRelativeTime } from "@/lib/utils";
 import { StatusDot } from "./StatusDot";
 
 export function IntegrationStatusBar() {
   const { data, isError, isLoading } = useIntegrationsStatus();
+  const { data: clippingAccounts } = useClippingAccounts();
 
   if (isLoading) {
     return <StatusDot label="API" color="muted" tooltip="Checking API status…" pulse />;
@@ -30,17 +32,34 @@ export function IntegrationStatusBar() {
               : `Instagram: ${ig.lastError?.message ?? "unknown error"}`
         }
       />
-      <StatusDot
-        label="Clip"
-        color={clip.mode === "mock" ? "muted" : clip.healthy ? "success" : "destructive"}
-        tooltip={
-          clip.mode === "mock"
-            ? "CLIPPING: mock mode (no CLIPPING_SESSION_COOKIE configured)"
-            : clip.healthy
-              ? `CLIPPING: connected — last successful request ${formatRelativeTime(clip.lastSuccessAt)}`
-              : `CLIPPING: ${clip.lastError?.message ?? "unknown error"}`
-        }
-      />
+      {clippingAccounts?.items.length ? (
+        clippingAccounts.items.map((account) => (
+          <StatusDot
+            key={account.id}
+            label={account.label}
+            color={!account.hasStorageState ? "muted" : account.healthy ? "success" : "destructive"}
+            tooltip={
+              !account.hasStorageState
+                ? `CLIPPING (${account.label}): not logged in yet — run the clipping:login script.`
+                : account.healthy
+                  ? `CLIPPING (${account.label}): connected — last used ${formatRelativeTime(account.lastUsedAt)}`
+                  : `CLIPPING (${account.label}): ${account.lastError?.message ?? "unknown error"}`
+            }
+          />
+        ))
+      ) : (
+        <StatusDot
+          label="Clip"
+          color={clip.mode === "mock" ? "muted" : clip.healthy ? "success" : "destructive"}
+          tooltip={
+            clip.mode === "mock"
+              ? "CLIPPING: mock mode (no CLIPPING_SESSION_COOKIE configured)"
+              : clip.healthy
+                ? `CLIPPING: connected — last successful request ${formatRelativeTime(clip.lastSuccessAt)}`
+                : `CLIPPING: ${clip.lastError?.message ?? "unknown error"}`
+          }
+        />
+      )}
     </div>
   );
 }

@@ -10,10 +10,15 @@ export interface ClippingStatus {
   uploadedClips: number;
 }
 
-export function useClippingClips(page: number, limit = 20) {
+export function useClippingClips(page: number, limit = 20, instagramAccountIds?: string[] | null) {
   return useQuery({
-    queryKey: ["clipping-clips", page, limit],
-    queryFn: () => apiClient.get<PaginatedResult<ClippingSubmission>>(`/api/clipping/clips?page=${page}&limit=${limit}`),
+    queryKey: ["clipping-clips", page, limit, instagramAccountIds ?? "all"],
+    queryFn: () =>
+      apiClient.get<PaginatedResult<ClippingSubmission>>(
+        `/api/clipping/clips?page=${page}&limit=${limit}${
+          instagramAccountIds ? `&instagramAccountIds=${instagramAccountIds.join(",")}` : ""
+        }`
+      ),
     placeholderData: (prev) => prev,
   });
 }
@@ -22,24 +27,6 @@ export function useClippingStatus() {
   return useQuery({
     queryKey: ["clipping-status"],
     queryFn: () => apiClient.get<ClippingStatus>("/api/clipping/status"),
-  });
-}
-
-export interface ActiveClippingIdentity {
-  userId: string | null;
-  email: string | null;
-  displayName: string | null;
-  updatedAt: string;
-}
-
-/** Which CLIPPING login is currently active in the browser, per the cookie-sync extension
- * decoding it from the session cookie — polled since it can change any time you switch
- * accounts in the browser, with no push mechanism from the extension. */
-export function useActiveClippingIdentity() {
-  return useQuery({
-    queryKey: ["clipping-active-identity"],
-    queryFn: () => apiClient.get<{ identity: ActiveClippingIdentity | null }>("/api/clipping/active-identity"),
-    refetchInterval: 30_000,
   });
 }
 

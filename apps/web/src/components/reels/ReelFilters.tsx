@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCreators } from "@/api/creators";
 import { useInstagramAccounts } from "@/api/instagram";
+import { useClippingScope } from "@/lib/clippingScope";
 import type { ReelsFilters } from "@/api/reels";
 
 interface ReelFiltersProps {
@@ -39,7 +40,11 @@ const SORT_OPTIONS = [
 
 export function ReelFilters({ filters, onChange }: ReelFiltersProps) {
   const { data: creators } = useCreators();
-  const { data: accounts } = useInstagramAccounts();
+  const { data: allAccounts } = useInstagramAccounts();
+  const { selectedId, instagramAccountsInScope } = useClippingScope();
+  // Restricted to the active CLIPPING account's own Instagram accounts when scoped — can't
+  // pick an account outside the current scope, since it wouldn't show anything anyway.
+  const accounts = selectedId ? { items: instagramAccountsInScope } : allAccounts;
 
   const set = (patch: Partial<ReelsFilters>) => onChange({ ...filters, ...patch, page: 1 });
 

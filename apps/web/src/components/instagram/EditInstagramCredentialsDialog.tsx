@@ -11,8 +11,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { useUpdateInstagramAccount } from "@/api/instagram";
+import { useClippingAccounts } from "@/api/clippingAccounts";
 
 interface EditInstagramCredentialsDialogProps {
   account: InstagramAccount | null;
@@ -22,15 +24,16 @@ interface EditInstagramCredentialsDialogProps {
 export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditInstagramCredentialsDialogProps) {
   const [accessToken, setAccessToken] = useState("");
   const [clippingAccountId, setClippingAccountId] = useState("");
-  const [clippingOwnerEmail, setClippingOwnerEmail] = useState("");
+  const [clippingAccountRefId, setClippingAccountRefId] = useState<string>("none");
   const update = useUpdateInstagramAccount();
+  const { data: clippingAccounts } = useClippingAccounts();
   const { toast } = useToast();
 
-  // Neither of these is a secret (unlike accessToken), so it's fine to prefill for editing.
+  // Not a secret (unlike accessToken), so it's fine to prefill for editing.
   useEffect(() => {
     setClippingAccountId(account?.clippingAccountId ?? "");
-    setClippingOwnerEmail(account?.clippingOwnerEmail ?? "");
-  }, [account?.id, account?.clippingAccountId, account?.clippingOwnerEmail]);
+    setClippingAccountRefId(account?.clippingAccountRefId ?? "none");
+  }, [account?.id, account?.clippingAccountId, account?.clippingAccountRefId]);
 
   if (!account) return null;
 
@@ -41,7 +44,7 @@ export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditIn
         input: {
           accessToken: accessToken || undefined,
           clippingAccountId: clippingAccountId || undefined,
-          clippingOwnerEmail: clippingOwnerEmail || undefined,
+          clippingAccountRefId: clippingAccountRefId === "none" ? null : clippingAccountRefId,
         },
       },
       {
@@ -91,14 +94,24 @@ export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditIn
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="edit-clipping-owner-email">CLIPPING login (email)</Label>
-            <Input
-              id="edit-clipping-owner-email"
-              placeholder="Which CLIPPING account this Instagram account is registered under"
-              autoComplete="off"
-              value={clippingOwnerEmail}
-              onChange={(e) => setClippingOwnerEmail(e.target.value)}
-            />
+            <Label htmlFor="edit-clipping-account-ref">CLIPPING account (linked)</Label>
+            <Select value={clippingAccountRefId} onValueChange={setClippingAccountRefId}>
+              <SelectTrigger id="edit-clipping-account-ref">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Not linked yet</SelectItem>
+                {clippingAccounts?.items.map((clippingAccount) => (
+                  <SelectItem key={clippingAccount.id} value={clippingAccount.id}>
+                    {clippingAccount.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Which CLIPPING login (Playwright-backed session, set up on the Settings page) submissions for this
+              Instagram account go through.
+            </p>
           </div>
         </div>
 
@@ -108,7 +121,12 @@ export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditIn
           </Button>
           <Button
             onClick={handleSave}
-            disabled={update.isPending || (!accessToken && !clippingAccountId && !clippingOwnerEmail)}
+            disabled={
+              update.isPending ||
+              (!accessToken &&
+                !clippingAccountId &&
+                clippingAccountRefId === (account.clippingAccountRefId ?? "none"))
+            }
           >
             Save
           </Button>

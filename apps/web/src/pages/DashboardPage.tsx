@@ -1,10 +1,37 @@
+import { useState } from "react";
 import { Film, Link2, Users, AlertTriangle, DollarSign, Clock } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { useActivityLog, useDashboardStats } from "@/api/dashboard";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useActivityLog, useDashboardStats, type ViewsSource } from "@/api/dashboard";
+import { useClippingScope } from "@/lib/clippingScope";
 import { formatCurrency, formatRelativeTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+
+const VIEWS_SOURCE_KEY = "kick-manager:views-source";
+
+function useViewsSourcePreference() {
+  const [viewsSource, setViewsSourceState] = useState<ViewsSource>(() => {
+    try {
+      const stored = localStorage.getItem(VIEWS_SOURCE_KEY);
+      return stored === "clipping" ? "clipping" : "live";
+    } catch {
+      return "live";
+    }
+  });
+
+  const setViewsSource = (value: ViewsSource) => {
+    setViewsSourceState(value);
+    try {
+      localStorage.setItem(VIEWS_SOURCE_KEY, value);
+    } catch {
+      // localStorage unavailable — preference just won't survive a reload
+    }
+  };
+
+  return [viewsSource, setViewsSource] as const;
+}
 
 const STAT_CARDS = [
   { key: "totalReels", label: "Total Reels", icon: Film, tone: "primary" },
@@ -38,16 +65,22 @@ function usePayoutCycle() {
 }
 
 export function DashboardPage() {
-  const { data: stats, isLoading, isError } = useDashboardStats();
+  const { selectedAccount, scopedInstagramAccountIds } = useClippingScope();
+  const [viewsSource, setViewsSource] = useViewsSourcePreference();
+  const { data: stats, isLoading, isError } = useDashboardStats(scopedInstagramAccountIds, viewsSource);
   const { data: activity } = useActivityLog();
   const { daysLeft, daysElapsed, progress } = usePayoutCycle();
 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Dashboard{selectedAccount ? <span className="text-muted-foreground"> — {selectedAccount.label}</span> : null}
+        </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          An overview of your Instagram Reels and CLIPPING submissions.
+          {selectedAccount
+            ? `Instagram Reels and CLIPPING submissions for accounts linked to "${selectedAccount.label}".`
+            : "An overview of your Instagram Reels and CLIPPING submissions."}
         </p>
       </div>
 
@@ -64,13 +97,46 @@ export function DashboardPage() {
               aria-hidden="true"
               className="pointer-events-none absolute -right-20 -top-20 h-72 w-72 rounded-full bg-primary/10 blur-[80px]"
             />
-            <CardHeader className="relative flex-row items-center gap-3 space-y-0 p-6 pb-4">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
-                <DollarSign className="h-4 w-4" aria-hidden="true" />
-              </span>
-              <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Estimated Payout
-              </CardTitle>
+            <CardHeader className="relative flex-row items-center justify-between gap-3 space-y-0 p-6 pb-4">
+              <div className="flex items-center gap-3">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
+                  <DollarSign className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Estimated Payout
+                </CardTitle>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-0.5 rounded-md border border-border/70 bg-background/50 p-0.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setViewsSource("live")}
+                      className={cn(
+                        "rounded px-2 py-1 font-medium transition-colors",
+                        viewsSource === "live" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      Live
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewsSource("clipping")}
+                      className={cn(
+                        "rounded px-2 py-1 font-medium transition-colors",
+                        viewsSource === "clipping" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      CLIPPING
+                    </button>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  {viewsSource === "live"
+                    ? "Using this app's own Instagram view counts (updated on every sync) — CLIPPING's own numbers can lag up to ~12hr behind."
+                    : "Using CLIPPING's own reported view counts, which can lag up to ~12hr behind Instagram's real numbers."}
+                </TooltipContent>
+              </Tooltip>
             </CardHeader>
             <CardContent className="relative p-6 pt-0">
               {isLoading || !stats ? (
@@ -80,7 +146,9 @@ export function DashboardPage() {
                   <p className="text-5xl font-semibold tabular-nums tracking-tight">
                     {formatCurrency(stats.estimatedPayout)}
                   </p>
-                  <p className="mt-2 text-sm font-medium text-muted-foreground">USDT (ETH)</p>
+                  <p className="mt-2 text-sm font-medium text-muted-foreground">
+                    USDT (ETH) · {viewsSource === "live" ? "live Instagram views" : "CLIPPING's reported views"}
+                  </p>
                 </>
               )}
             </CardContent>

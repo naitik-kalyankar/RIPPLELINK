@@ -2,10 +2,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ActivityLogEntry, DashboardStats, SyncResult } from "@kick-manager/shared";
 import { apiClient } from "@/lib/apiClient";
 
-export function useDashboardStats() {
+export type ViewsSource = "live" | "clipping";
+
+export function useDashboardStats(instagramAccountIds?: string[] | null, viewsSource: ViewsSource = "live") {
   return useQuery({
-    queryKey: ["dashboard", "stats"],
-    queryFn: () => apiClient.get<DashboardStats>("/api/dashboard/stats"),
+    queryKey: ["dashboard", "stats", instagramAccountIds ?? "all", viewsSource],
+    queryFn: () => {
+      const params = new URLSearchParams({ viewsSource });
+      if (instagramAccountIds) params.set("instagramAccountIds", instagramAccountIds.join(","));
+      return apiClient.get<DashboardStats>(`/api/dashboard/stats?${params.toString()}`);
+    },
   });
 }
 

@@ -20,6 +20,7 @@ export const createInstagramAccountSchema = z
     // but can be added later via update, so optional at creation time.
     clippingAccountId: z.string().optional(),
     clippingOwnerEmail: z.string().optional(),
+    clippingAccountRefId: z.string().optional(),
   })
   .refine((data) => data.accessToken || (data.instagramId && data.username), {
     message: "Provide an access token (auto-detects the account), or both username and Instagram account ID for mock mode.",
@@ -33,8 +34,28 @@ export const updateInstagramAccountSchema = z.object({
   accessToken: z.string().optional(),
   clippingAccountId: z.string().optional(),
   clippingOwnerEmail: z.string().optional(),
+  clippingAccountRefId: z.string().nullable().optional(),
 });
 export type UpdateInstagramAccountInput = z.infer<typeof updateInstagramAccountSchema>;
+
+export const createClippingAccountSchema = z.object({
+  label: z.string().min(1),
+  email: z.string().min(1).optional(),
+  // Optional: defaults to CLIPPING_API_URL server-side (CLIPPING has one known domain today;
+  // per-account only in case that ever changes).
+  apiUrl: z.string().min(1).optional(),
+  campaignId: z.string().min(1),
+});
+export type CreateClippingAccountInput = z.infer<typeof createClippingAccountSchema>;
+
+export const updateClippingAccountSchema = z.object({
+  label: z.string().min(1).optional(),
+  email: z.string().min(1).nullable().optional(),
+  apiUrl: z.string().min(1).optional(),
+  campaignId: z.string().min(1).optional(),
+  active: z.boolean().optional(),
+});
+export type UpdateClippingAccountInput = z.infer<typeof updateClippingAccountSchema>;
 
 export const updateClippingSessionCookieSchema = z.object({
   cookie: z.string().min(1),

@@ -68,7 +68,11 @@ export async function reelsRoutes(app: FastifyInstance) {
 
     const where: Prisma.ReelWhereInput = {
       ...(query.creatorId ? { creatorId: query.creatorId } : {}),
-      ...(query.instagramAccountId ? { instagramAccountId: query.instagramAccountId } : {}),
+      // Comma-separated: a single id (the per-page account dropdown) or several (the sidebar's
+      // CLIPPING-account scope, joined client-side) both flow through the same param/field.
+      ...(query.instagramAccountId
+        ? { instagramAccountId: { in: query.instagramAccountId.split(",").filter(Boolean) } }
+        : {}),
       ...(query.creatorDetectionStatus ? { creatorDetectionStatus: query.creatorDetectionStatus } : {}),
       ...(query.dateRange !== "all"
         ? { publishedAt: dateRangeToFilter(query.dateRange, query.dateFrom, query.dateTo) }

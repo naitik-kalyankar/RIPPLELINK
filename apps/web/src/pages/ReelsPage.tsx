@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useBulkLinkReels, useReels, type ReelsFilters } from "@/api/reels";
 import { useCampaignId } from "@/api/clipping";
+import { useClippingScope } from "@/lib/clippingScope";
 import { ReelCard } from "@/components/reels/ReelCard";
 import { ReelFilters } from "@/components/reels/ReelFilters";
 import { LinkReelModal } from "@/components/reels/LinkReelModal";
@@ -19,7 +20,14 @@ export function ReelsPage() {
   const [linkTarget, setLinkTarget] = useState<Reel | null>(null);
   const [previewTarget, setPreviewTarget] = useState<Reel | null>(null);
 
-  const { data, isLoading } = useReels(filters);
+  const { selectedAccount, scopedInstagramAccountIds } = useClippingScope();
+  // The page's own "Instagram account" filter always wins when set — the broader CLIPPING
+  // scope only fills in when the user hasn't picked one specific account here.
+  const effectiveFilters: ReelsFilters = {
+    ...filters,
+    instagramAccountId: filters.instagramAccountId ?? scopedInstagramAccountIds?.join(","),
+  };
+  const { data, isLoading } = useReels(effectiveFilters);
   const bulkLink = useBulkLinkReels();
   const campaignId = useCampaignId();
   const { toast } = useToast();
@@ -53,7 +61,9 @@ export function ReelsPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold tracking-tight">Reels</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">
+        Reels{selectedAccount ? <span className="text-muted-foreground"> — {selectedAccount.label}</span> : null}
+      </h1>
 
       {/* Docks directly under the sticky Topbar (see AppShell's --topbar-h) so filters/sort and
        * the view toggle stay reachable while scrolling a long Reel grid, instead of scrolling

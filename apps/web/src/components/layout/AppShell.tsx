@@ -5,11 +5,25 @@ import { Topbar } from "./Topbar";
 import { MobileNav } from "./MobileNav";
 import { LinkingProgressBar } from "./LinkingProgressBar";
 import { ProgressiveBlur } from "./ProgressiveBlur";
+import { cn } from "@/lib/utils";
 
 export function AppShell() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const topbarWrapperRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+
+  // The progressive blur only makes sense once there's scrolled content sitting behind the
+  // header to blur — at the very top of the page it just muddies page content for no reason,
+  // so it stays off by default and fades in only once the user has actually scrolled down.
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    const onScroll = () => setScrolled(main.scrollTop > 4);
+    onScroll();
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => main.removeEventListener("scroll", onScroll);
+  }, []);
 
   // Publishes the sticky Topbar's actual rendered height (it varies — one row on sm+, two
   // stacked rows on mobile) as a CSS var on `main`, the shared scroll-container ancestor. Pages
@@ -36,7 +50,12 @@ export function AppShell() {
          * content read as increasingly blurred toward the header instead of just hidden behind it. */}
         <main ref={mainRef} className="relative flex-1 overflow-y-auto scrollbar-thin pb-3">
           <div ref={topbarWrapperRef} className="sticky top-0 z-30">
-            <ProgressiveBlur className="absolute inset-x-0 top-0 -z-10 h-[calc(100%+2.5rem)]" />
+            <ProgressiveBlur
+              className={cn(
+                "absolute inset-x-0 top-0 -z-10 h-[calc(100%+2.5rem)] transition-opacity duration-200 ease-in-out",
+                scrolled ? "opacity-100" : "opacity-0"
+              )}
+            />
             <div
               aria-hidden="true"
               className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(100%+2.5rem)] bg-gradient-to-b from-background via-background/50 to-transparent"

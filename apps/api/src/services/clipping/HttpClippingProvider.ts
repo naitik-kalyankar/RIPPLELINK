@@ -1,4 +1,3 @@
-import { env } from "../../lib/env.js";
 import { recordIntegrationError, recordIntegrationSuccess } from "../../lib/integrationHealth.js";
 import type {
   ClippingService,
@@ -38,33 +37,48 @@ import { ClippingApiError } from "./ClippingService.js";
  * than guessing one — it isn't on the critical path (duplicate checks use `checkSubmission`,
  * which scans the list endpoint instead).
  */
+export interface HttpClippingProviderConfig {
+  apiUrl: string;
+  campaignId: string;
+  // A getter, not a static string: a Playwright-backed session can go stale mid-process and
+  // needs to be re-read (and possibly refreshed) live, unlike the legacy single env-var
+  // cookie which never changes shape between requests.
+  getSessionCookie: () => Promise<string>;
+  // Present only for Playwright-backed configs — lets a 401/403 trigger one refresh-and-retry
+  // instead of immediately failing. Absent for the legacy config, so its current "no
+  // auto-refresh, fail with instructions" behavior is completely unchanged.
+  refresh?: () => Promise<void>;
+  // Key under which this instance's request outcomes are tracked in integrationHealth.ts —
+  // "clipping" (the default) for the legacy global provider, "clipping:<accountId>" for a
+  // per-ClippingAccount provider, so each account's health is visible independently.
+  healthKey?: string;
+}
+
 export class HttpClippingProvider implements ClippingService {
+  constructor(private readonly config: HttpClippingProviderConfig) {}
+
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const healthKey = this.config.healthKey ?? "clipping";
     try {
       const body = await this.requestInner<T>(path, init);
-      recordIntegrationSuccess("clipping");
+      recordIntegrationSuccess(healthKey);
       return body;
     } catch (error) {
-      if (error instanceof ClippingApiError) recordIntegrationError("clipping", error.message);
+      if (error instanceof ClippingApiError) recordIntegrationError(healthKey, error.message);
       throw error;
     }
   }
 
-  private async requestInner<T>(path: string, init: RequestInit): Promise<T> {
-    if (!env.clipping.apiUrl || !env.clipping.sessionCookie || !env.clipping.campaignId) {
-      throw new ClippingApiError(
-        "CLIPPING_API_URL / CLIPPING_SESSION_COOKIE / CLIPPING_CAMPAIGN_ID are not configured.",
-        "auth"
-      );
-    }
+  private async requestInner<T>(path: string, init: RequestInit, isRetry = false): Promise<T> {
+    const sessionCookie = await this.config.getSessionCookie();
 
     let response: Response;
     try {
-      response = await fetch(`${env.clipping.apiUrl}${path}`, {
+      response = await fetch(`${this.config.apiUrl}${path}`, {
         ...init,
         headers: {
           "Content-Type": "application/json",
-          Cookie: env.clipping.sessionCookie,
+          Cookie: sessionCookie,
           ...init.headers,
         },
       });
@@ -73,6 +87,10 @@ export class HttpClippingProvider implements ClippingService {
     }
 
     if (response.status === 401 || response.status === 403) {
+      if (this.config.refresh && !isRetry) {
+        await this.config.refresh();
+        return this.requestInner<T>(path, init, true);
+      }
       throw new ClippingApiError(
         "CLIPPING session expired or invalid — refresh CLIPPING_SESSION_COOKIE with a fresh " +
           "value copied from your logged-in browser session (devtools → Network → any " +
@@ -160,7 +178,7 @@ export class HttpClippingProvider implements ClippingService {
       });
 
       const body = await this.request<ListResponse>(
-        `/api/campaigns/${env.clipping.campaignId}/clips?${params.toString()}`
+        `/api/campaigns/${this.config.campaignId}/clips?${params.toString()}`
       );
 
       if (!body?.success || !body.data) {
@@ -169,7 +187,7 @@ export class HttpClippingProvider implements ClippingService {
 
       for (const raw of body.data.clips ?? []) {
         if (!raw.videoId || !raw._id) continue; // skip malformed rows rather than crash the whole sync
-        collected.push(toSubmissionRaw(raw, env.clipping.campaignId ?? null, raw.url ?? "", raw.bounty ?? null));
+        collected.push(toSubmissionRaw(raw, this.config.campaignId, raw.url ?? "", raw.bounty ?? null));
       }
 
       if (!body.data.pagination?.hasNext) break;

@@ -14,6 +14,7 @@ function serializeAccount(account: {
   accessToken: string | null;
   clippingAccountId: string | null;
   clippingOwnerEmail: string | null;
+  clippingAccountRefId: string | null;
   lastSyncedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -28,6 +29,7 @@ function serializeAccount(account: {
     hasAccessToken: Boolean(account.accessToken),
     clippingAccountId: account.clippingAccountId,
     clippingOwnerEmail: account.clippingOwnerEmail,
+    clippingAccountRefId: account.clippingAccountRefId,
     lastSyncedAt: account.lastSyncedAt?.toISOString() ?? null,
     createdAt: account.createdAt.toISOString(),
     updatedAt: account.updatedAt.toISOString(),
@@ -78,6 +80,7 @@ export async function instagramRoutes(app: FastifyInstance) {
         accessToken: body.accessToken,
         clippingAccountId: body.clippingAccountId,
         clippingOwnerEmail: body.clippingOwnerEmail,
+        clippingAccountRefId: body.clippingAccountRefId,
       },
     });
     await activityLogService.log(

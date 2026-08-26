@@ -3,7 +3,9 @@ import type { LinkStatus, Reel } from "@kick-manager/shared";
 import { prisma } from "../../lib/db.js";
 
 export const reelInclude = {
-  instagramAccount: { select: { id: true, username: true, displayName: true, clippingAccountId: true } },
+  instagramAccount: {
+    select: { id: true, username: true, displayName: true, clippingAccountId: true, clippingAccountRefId: true },
+  },
   creator: { include: { aliases: true } },
   clippingSubmission: true,
   submissionAttempts: { orderBy: { attemptedAt: "desc" as const }, take: 1 },

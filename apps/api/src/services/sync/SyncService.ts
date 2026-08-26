@@ -1,7 +1,8 @@
 import type { SyncResult } from "@kick-manager/shared";
 import { prisma } from "../../lib/db.js";
 import { getInstagramServiceForAccount } from "../instagram/index.js";
-import { clippingService } from "../clipping/index.js";
+import { clippingService, getClippingProviderForAccount } from "../clipping/index.js";
+import type { ClippingSubmissionRaw } from "../clipping/ClippingService.js";
 import { creatorDetectionService } from "../creators/CreatorDetectionService.js";
 import { activityLogService } from "../activity/ActivityLogService.js";
 import { reelMatchingService } from "../reels/ReelMatchingService.js";
@@ -101,6 +102,43 @@ export class SyncService {
     return { instagramReelsFetched: fetched, instagramReelsUpserted: upserted, creatorsDetected: detected, errors };
   }
 
+  /** Zero ClippingAccount rows (fresh/legacy install): one call against the legacy global
+   * provider, byte-for-byte today's behavior — including letting a throw here propagate to
+   * syncClipping's outer try/catch exactly as before.
+   *
+   * With rows present: the legacy session KEEPS being fetched alongside them, not replaced —
+   * any Instagram account not yet linked to a ClippingAccount (see ClippingAccountResolver)
+   * still relies on the legacy session for its submissions, so its clips must keep showing up
+   * here too. Each source (legacy + every account) is fetched independently so one failing
+   * source doesn't block the others, mirroring syncInstagram()'s per-account pattern. */
+  private async fetchAllClips(errors: string[]): Promise<ClippingSubmissionRaw[]> {
+    const accounts = await prisma.clippingAccount.findMany({ where: { active: true } });
+    if (accounts.length === 0) return clippingService.getUploadedClips();
+
+    const collected: ClippingSubmissionRaw[] = [];
+
+    try {
+      collected.push(...(await clippingService.getUploadedClips()));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown CLIPPING sync error.";
+      errors.push(`Legacy session: ${message}`);
+      await activityLogService.log(`CLIPPING sync failed for the legacy session: ${message}`, "error");
+    }
+
+    for (const account of accounts) {
+      try {
+        const clips = await getClippingProviderForAccount(account).getUploadedClips();
+        collected.push(...clips);
+        await prisma.clippingAccount.update({ where: { id: account.id }, data: { lastUsedAt: new Date() } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown CLIPPING sync error.";
+        errors.push(`${account.label}: ${message}`);
+        await activityLogService.log(`CLIPPING sync failed for ${account.label}: ${message}`, "error");
+      }
+    }
+    return collected;
+  }
+
   async syncClipping(): Promise<
     Pick<SyncResult, "clippingSubmissionsFetched" | "clippingSubmissionsUpserted" | "newlyLinked" | "newlyUnlinked" | "errors">
   > {
@@ -110,7 +148,7 @@ export class SyncService {
     let removedStale = 0;
 
     try {
-      const clips = await clippingService.getUploadedClips();
+      const clips = await this.fetchAllClips(errors);
       fetched = clips.length;
 
       for (const clip of clips) {
@@ -163,12 +201,19 @@ export class SyncService {
 
       // The fresh fetch is the full source of truth (spec §11) — a submission that no longer
       // appears in it was deleted on CLIPPING's side, so drop the local link too rather than
-      // leaving Reels stuck showing "Linked" forever. Only runs when the fetch itself
-      // succeeded — a thrown/partial fetch must never be treated as "nothing exists anymore."
+      // leaving Reels stuck showing "Linked" forever. Only runs when EVERY account's fetch
+      // succeeded this run — with multiple ClippingAccounts, fetchAllClips can partially fail
+      // (one account's session is stale) while still returning the clips it did get; treating
+      // that partial result as "the full remote state" would wrongly delete every submission
+      // belonging to the account(s) that failed. A thrown/partial fetch must never be treated
+      // as "nothing exists anymore."
       const fetchedClipIds = new Set(clips.map((c) => c.clippingClipId));
-      const staleSubmissions = await prisma.clippingSubmission.findMany({
-        where: { clippingClipId: { notIn: Array.from(fetchedClipIds) } },
-      });
+      const staleSubmissions =
+        errors.length > 0
+          ? []
+          : await prisma.clippingSubmission.findMany({
+              where: { clippingClipId: { notIn: Array.from(fetchedClipIds) } },
+            });
       if (staleSubmissions.length > 0) {
         await prisma.clippingSubmission.deleteMany({
           where: { id: { in: staleSubmissions.map((s) => s.id) } },

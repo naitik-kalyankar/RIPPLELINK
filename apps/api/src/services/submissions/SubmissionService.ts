@@ -1,6 +1,7 @@
 import type { LinkReelInput } from "@kick-manager/shared";
 import { prisma } from "../../lib/db.js";
-import { clippingService, ClippingApiError } from "../clipping/index.js";
+import { clippingService, ClippingApiError, type ClippingService } from "../clipping/index.js";
+import { clippingAccountResolver } from "../clipping/ClippingAccountResolver.js";
 import { bountyMatchingService } from "../clipping/BountyMatchingService.js";
 import { activityLogService } from "../activity/ActivityLogService.js";
 import { reelInclude, serializeReel, type ReelWithRelations } from "../reels/ReelMatchingService.js";
@@ -38,7 +39,9 @@ export class SubmissionService {
     if (!reel) throw new ReelNotFoundError();
     if (reel.clippingSubmission) throw new AlreadyLinkedError();
 
-    const externalMatch = await clippingService.checkSubmission(reel.instagramReelId);
+    const provider = await clippingAccountResolver.resolveProviderForInstagramAccount(reel.instagramAccount);
+
+    const externalMatch = await provider.checkSubmission(reel.instagramReelId);
     if (externalMatch) {
       await prisma.clippingSubmission.upsert({
         where: { clippingClipId: externalMatch.clippingClipId },
@@ -71,7 +74,7 @@ export class SubmissionService {
     await prisma.submissionAttempt.create({ data: { reelId, status: "uploading" } });
 
     try {
-      const result = await clippingService.submitClip({
+      const result = await provider.submitClip({
         // Each Instagram account maps to its own CLIPPING account ID — not a single global
         // value — so it's resolved from the Reel's own account, not an env var.
         accountId: input.accountId ?? reel.instagramAccount.clippingAccountId ?? undefined,

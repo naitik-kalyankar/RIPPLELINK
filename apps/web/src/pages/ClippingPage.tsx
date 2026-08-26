@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,18 +6,23 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useClippingClips, useClippingStatus, useSyncClipping } from "@/api/clipping";
+import { useClippingScope } from "@/lib/clippingScope";
 import { formatCount, formatDate, formatRelativeTime } from "@/lib/utils";
 
 export function ClippingPage() {
   const { data: status } = useClippingStatus();
+  const { selectedAccount, scopedInstagramAccountIds } = useClippingScope();
   const [page, setPage] = useState(1);
-  const { data: clips, isLoading } = useClippingClips(page);
+  useEffect(() => setPage(1), [selectedAccount?.id]);
+  const { data: clips, isLoading } = useClippingClips(page, 20, scopedInstagramAccountIds);
   const sync = useSyncClipping();
   const { toast } = useToast();
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Clipping</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">
+        Clipping{selectedAccount ? <span className="text-muted-foreground"> — {selectedAccount.label}</span> : null}
+      </h1>
 
       <Card>
         <CardContent className="flex flex-col gap-4 p-4 sm:p-6 lg:flex-row lg:items-center lg:justify-between lg:gap-6">

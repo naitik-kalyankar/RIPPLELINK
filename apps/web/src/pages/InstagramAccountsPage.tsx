@@ -1,20 +1,19 @@
 import { useState } from "react";
-import { CircleUserRound } from "lucide-react";
 import type { InstagramAccount } from "@kick-manager/shared";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
 import { useInstagramAccounts } from "@/api/instagram";
-import { useActiveClippingIdentity } from "@/api/clipping";
+import { useClippingAccounts, type ClippingAccountStatus } from "@/api/clippingAccounts";
+import { StatusDot } from "@/components/layout/StatusDot";
 import { AddInstagramAccountModal } from "@/components/instagram/AddInstagramAccountModal";
 import { InstagramAccountCard } from "@/components/instagram/InstagramAccountCard";
 import { EditInstagramCredentialsDialog } from "@/components/instagram/EditInstagramCredentialsDialog";
 
-const UNASSIGNED_GROUP = "__unassigned__";
+const UNLINKED_GROUP = "__unlinked__";
 
-function groupByClippingOwner(accounts: InstagramAccount[]): Map<string, InstagramAccount[]> {
+function groupByClippingAccount(accounts: InstagramAccount[]): Map<string, InstagramAccount[]> {
   const groups = new Map<string, InstagramAccount[]>();
   for (const account of accounts) {
-    const key = account.clippingOwnerEmail ?? UNASSIGNED_GROUP;
+    const key = account.clippingAccountRefId ?? UNLINKED_GROUP;
     const existing = groups.get(key);
     if (existing) existing.push(account);
     else groups.set(key, [account]);
@@ -22,13 +21,32 @@ function groupByClippingOwner(accounts: InstagramAccount[]): Map<string, Instagr
   return groups;
 }
 
+function GroupStatus({ clippingAccount }: { clippingAccount: ClippingAccountStatus }) {
+  if (clippingAccount.loginInProgress) {
+    return <StatusDot label="Waiting for login…" color="muted" tooltip="A browser window is open on this machine." pulse />;
+  }
+  if (!clippingAccount.hasStorageState) {
+    return <StatusDot label="Not logged in" color="muted" tooltip="Connect this account's session on the Settings page." />;
+  }
+  if (clippingAccount.healthy) {
+    return <StatusDot label="Connected" color="success" tooltip="Last CLIPPING request from this account succeeded." />;
+  }
+  return (
+    <StatusDot
+      label="Error"
+      color="destructive"
+      tooltip={clippingAccount.lastError?.message ?? "The last CLIPPING request from this account failed."}
+    />
+  );
+}
+
 export function InstagramAccountsPage() {
   const { data, isLoading } = useInstagramAccounts();
-  const { data: activeIdentityData } = useActiveClippingIdentity();
+  const { data: clippingAccountsData } = useClippingAccounts();
   const [credentialsTarget, setCredentialsTarget] = useState<InstagramAccount | null>(null);
 
-  const activeIdentity = activeIdentityData?.identity ?? null;
-  const groups = data ? groupByClippingOwner(data.items) : new Map<string, InstagramAccount[]>();
+  const clippingAccountsById = new Map((clippingAccountsData?.items ?? []).map((a) => [a.id, a]));
+  const groups = data ? groupByClippingAccount(data.items) : new Map<string, InstagramAccount[]>();
 
   return (
     <div className="flex flex-col gap-5">
@@ -37,40 +55,17 @@ export function InstagramAccountsPage() {
         <AddInstagramAccountModal />
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/70 bg-accent/30 px-4 py-3">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-muted-foreground">
-          <CircleUserRound className="h-4 w-4" />
-        </span>
-        {activeIdentity ? (
-          <>
-            <p className="text-sm leading-snug">
-              <span className="text-muted-foreground">Currently signed into CLIPPING in your browser as </span>
-              <span className="font-medium text-foreground">
-                {activeIdentity.displayName ?? activeIdentity.email ?? activeIdentity.userId}
-                {activeIdentity.displayName && activeIdentity.email ? ` (${activeIdentity.email})` : ""}
-              </span>
-            </p>
-            <Badge variant="success" className="ml-auto">Active</Badge>
-          </>
-        ) : (
-          <span className="text-sm text-muted-foreground">
-            No active CLIPPING browser session detected yet — open clipping.net with the cookie-sync extension
-            running to detect which account you're on.
-          </span>
-        )}
-      </div>
-
       <div className="flex flex-col gap-5">
         {isLoading && Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)}
         {data &&
-          Array.from(groups.entries()).map(([owner, accounts]) => {
-            const isUnassigned = owner === UNASSIGNED_GROUP;
-            const isActiveGroup = !isUnassigned && activeIdentity?.email === owner;
+          Array.from(groups.entries()).map(([key, accounts]) => {
+            const isUnlinked = key === UNLINKED_GROUP;
+            const clippingAccount = isUnlinked ? null : clippingAccountsById.get(key);
             return (
-              <div key={owner} className="flex flex-col gap-2.5">
+              <div key={key} className="flex flex-col gap-2.5">
                 <div className="flex items-center gap-2 px-0.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <span>{isUnassigned ? "CLIPPING account not set" : owner}</span>
-                  {isActiveGroup && <Badge variant="success">Active in browser</Badge>}
+                  <span>{isUnlinked ? "Not linked to a CLIPPING account" : (clippingAccount?.label ?? "Unknown account")}</span>
+                  {clippingAccount && <GroupStatus clippingAccount={clippingAccount} />}
                 </div>
                 <div className="flex flex-col gap-2">
                   {accounts.map((account) => (

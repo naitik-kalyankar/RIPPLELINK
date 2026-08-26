@@ -10,3 +10,4 @@ build/
 apps/desktop/src-tauri/target/
 apps/api/prisma/dev.db
 coverage/
+apps/api/.clipping-sessions/

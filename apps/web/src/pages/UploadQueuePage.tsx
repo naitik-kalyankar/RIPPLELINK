@@ -6,11 +6,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useBulkLinkReels, useLinkReel, useReels } from "@/api/reels";
 import { useCampaignId } from "@/api/clipping";
+import { useClippingScope } from "@/lib/clippingScope";
 import { LinkStatusBadge } from "@/components/reels/LinkStatus";
 import { formatDate } from "@/lib/utils";
 
 export function UploadQueuePage() {
-  const { data, isLoading } = useReels({ page: 1, limit: 100, status: "all", sort: "newest" });
+  const { selectedAccount, scopedInstagramAccountIds } = useClippingScope();
+  const { data, isLoading } = useReels({
+    page: 1,
+    limit: 100,
+    status: "all",
+    sort: "newest",
+    instagramAccountId: scopedInstagramAccountIds?.join(","),
+  });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const linkReel = useLinkReel();
   const bulkLink = useBulkLinkReels();
@@ -51,7 +59,9 @@ export function UploadQueuePage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Upload Queue</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Upload Queue{selectedAccount ? <span className="text-muted-foreground"> — {selectedAccount.label}</span> : null}
+        </h1>
         <Button onClick={uploadSelected} disabled={selected.size === 0 || bulkLink.isPending}>
           <UploadCloud className="h-3.5 w-3.5" />
           Upload Selected {selected.size > 0 && `(${selected.size})`}

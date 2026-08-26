@@ -55,6 +55,13 @@ model InstagramAccount {
   // auto-detected). Not a secret.
   clippingOwnerEmail String?
 
+  // Which ClippingAccount (a real row, Playwright-backed session) this Instagram account
+  // belongs to. Additive alongside clippingOwnerEmail above rather than replacing it —
+  // existing accounts keep working via the free-text email match/legacy singleton provider
+  // until they're explicitly linked here. See ClippingAccountResolver.
+  clippingAccountRefId String?
+  clippingAccount      ClippingAccount? @relation(fields: [clippingAccountRefId], references: [id])
+
   lastSyncedAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -62,6 +69,28 @@ model InstagramAccount {
   reels Reel[]
 
   @@map("instagram_accounts")
+}
+
+// A real CLIPPING.net login, held alive as a persistent Playwright browser context
+// (see ClippingBrowserManager) instead of the single global env-var session used before
+// multi-account support. storageStatePath holds the Playwright-persisted cookies/localStorage
+// on disk (gitignored, same sensitivity as .env) — never serialized to the frontend.
+model ClippingAccount {
+  id               String    @id @default(cuid())
+  label            String
+  email            String?   @unique
+  apiUrl           String
+  campaignId       String
+  storageStatePath String
+  active           Boolean   @default(true)
+  lastUsedAt       DateTime?
+  lastLoginAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  instagramAccounts InstagramAccount[]
+
+  @@map("clipping_accounts")
 }
 
 model Creator {
