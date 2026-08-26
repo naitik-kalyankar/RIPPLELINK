@@ -23,7 +23,15 @@ function parseRatePer100k(rate: string | null): number | null {
  */
 type ViewsSource = "live" | "clipping";
 
-async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSource: ViewsSource = "live"): Promise<number> {
+interface PayoutResult {
+  estimatedPayout: number;
+  /** Sum of views across only the submissions actually counted toward estimatedPayout above —
+   * same qualifying set (has views, has a matching bounty rate, and clears the 1k-view floor
+   * in "live" mode) — so this number always explains exactly what the payout was computed from. */
+  qualifyingViews: number;
+}
+
+async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSource: ViewsSource = "live"): Promise<PayoutResult> {
   const [submissions, bounties] = await Promise.all([
     prisma.clippingSubmission.findMany({
       select: { views: true, bountyTag: true, reel: { select: { views: true } } },
@@ -42,6 +50,7 @@ async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSourc
   const MIN_QUALIFYING_VIEWS = 1_000;
 
   let total = 0;
+  let qualifyingViews = 0;
   for (const submission of submissions) {
     const views = viewsSource === "live" ? submission.reel?.views : submission.views;
     if (!views || !submission.bountyTag) continue;
@@ -52,8 +61,9 @@ async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSourc
     const ratePer100k = ratePer100kByBounty.get(submission.bountyTag.toLowerCase());
     if (ratePer100k == null) continue;
     total += (views / 100_000) * ratePer100k;
+    qualifyingViews += views;
   }
-  return Math.round(total * 100) / 100;
+  return { estimatedPayout: Math.round(total * 100) / 100, qualifyingViews };
 }
 
 export async function dashboardRoutes(app: FastifyInstance) {
@@ -66,7 +76,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
     const accountFilter = ids ? { instagramAccountId: { in: ids } } : {};
     const resolvedViewsSource: ViewsSource = viewsSource === "clipping" ? "clipping" : "live";
 
-    const [totalReels, linked, creators, instagramAccounts, failedSubmissions, estimatedPayout] = await Promise.all([
+    const [totalReels, linked, creators, instagramAccounts, failedSubmissions, payout] = await Promise.all([
       prisma.reel.count({ where: accountFilter }),
       prisma.reel.count({ where: { ...accountFilter, clippingSubmission: { isNot: null } } }),
       ids
@@ -86,7 +96,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
       creators,
       instagramAccounts,
       failedSubmissions,
-      estimatedPayout,
+      estimatedPayout: payout.estimatedPayout,
+      qualifyingViews: payout.qualifyingViews,
     };
   });
 

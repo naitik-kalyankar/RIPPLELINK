@@ -127,7 +127,12 @@ export interface DashboardStats {
   // Sum of (views / 100,000) * bounty rate across submissions whose bountyTag matches a known
   // ClippingBounty rate (format "$X/100K", scraped from CLIPPING's campaign page). Submissions
   // with no views yet or an unrecognized/missing bounty tag are excluded, not treated as $0.
+  // In "live" mode, a submission under 1,000 views is also excluded (hasn't cleared CLIPPING's
+  // own qualifying threshold yet).
   estimatedPayout: number;
+  // Sum of views across exactly the submissions counted into estimatedPayout above — lets the
+  // UI show what the payout figure was actually computed from.
+  qualifyingViews: number;
 }
 
 export interface ClippingBounty {

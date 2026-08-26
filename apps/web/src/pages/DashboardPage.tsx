@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Film, Link2, Users, AlertTriangle, DollarSign, Clock } from "lucide-react";
+import { Film, Link2, Eye, AlertTriangle, DollarSign, Clock } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +36,7 @@ function useViewsSourcePreference() {
 const STAT_CARDS = [
   { key: "totalReels", label: "Total Reels", icon: Film, tone: "primary" },
   { key: "linked", label: "Linked", icon: Link2, tone: "success" },
-  { key: "creators", label: "Creators", icon: Users, tone: "primary" },
+  { key: "qualifyingViews", label: "Qualifying Views", icon: Eye, tone: "primary" },
 ] as const;
 
 const TONE_CLASS: Record<string, string> = {
@@ -108,12 +108,12 @@ export function DashboardPage() {
               </div>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div className="flex items-center gap-0.5 rounded-md border border-border/70 bg-background/50 p-0.5 text-xs">
+                  <div className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5 text-xs">
                     <button
                       type="button"
                       onClick={() => setViewsSource("live")}
                       className={cn(
-                        "rounded px-2 py-1 font-medium transition-colors",
+                        "rounded-full px-2.5 py-1 font-medium transition-colors",
                         viewsSource === "live" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
                       )}
                     >
@@ -123,7 +123,7 @@ export function DashboardPage() {
                       type="button"
                       onClick={() => setViewsSource("clipping")}
                       className={cn(
-                        "rounded px-2 py-1 font-medium transition-colors",
+                        "rounded-full px-2.5 py-1 font-medium transition-colors",
                         viewsSource === "clipping" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
                       )}
                     >
