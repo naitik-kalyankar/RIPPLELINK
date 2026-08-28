@@ -26,7 +26,7 @@ function GroupStatus({ clippingAccount }: { clippingAccount: ClippingAccountStat
     return <StatusDot label="Waiting for login…" color="muted" tooltip="A browser window is open on this machine." pulse />;
   }
   if (!clippingAccount.hasStorageState) {
-    return <StatusDot label="Not logged in" color="muted" tooltip="Connect this account's session on the Settings page." />;
+    return <StatusDot label="Not signed in" color="muted" tooltip="Sign in on the Settings page to connect it." />;
   }
   if (clippingAccount.healthy) {
     return <StatusDot label="Connected" color="success" tooltip="Last CLIPPING request from this account succeeded." />;

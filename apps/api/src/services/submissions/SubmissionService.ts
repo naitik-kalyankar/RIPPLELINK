@@ -96,7 +96,7 @@ export class SubmissionService {
     }
   }
 
-  async bulkSubmit(reelIds: string[], input: LinkReelInput) {
+  async bulkSubmit(reelIds: string[], input: LinkReelInput & { bountyTags?: Record<string, string> }) {
     const results: Array<{ reelId: string; success: boolean; error?: string }> = [];
     let cursor = 0;
 
@@ -105,7 +105,10 @@ export class SubmissionService {
         const index = cursor++;
         const reelId = reelIds[index];
         try {
-          await this.submitReel(reelId, input);
+          // A per-Reel override (collected up front for Reels with no detected creator — see
+          // BulkBountyAssignModal) takes precedence over the shared fallback tag.
+          const bountyTag = input.bountyTags?.[reelId] ?? input.bountyTag;
+          await this.submitReel(reelId, { ...input, bountyTag });
           results[index] = { reelId, success: true };
         } catch (error) {
           const message =

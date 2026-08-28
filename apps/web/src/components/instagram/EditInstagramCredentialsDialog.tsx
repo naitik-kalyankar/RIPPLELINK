@@ -65,8 +65,8 @@ export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditIn
           <DialogTitle>Credentials — @{account.username}</DialogTitle>
           <DialogDescription>
             {account.hasAccessToken
-              ? "A token is already set for this account (~60 day lifetime — rotate it here before it expires)."
-              : "No token set — this account is currently syncing mock data. Add one to fetch real Reels."}
+              ? "An access token is already set (lasts about 60 days — come back and refresh it before then)."
+              : "No access token yet — this account is showing sample data. Add one below to fetch real Reels."}
           </DialogDescription>
         </DialogHeader>
 
@@ -76,7 +76,7 @@ export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditIn
             <Input
               id="edit-access-token"
               type="password"
-              placeholder={account.hasAccessToken ? "•••••••••••••••• (paste a fresh one to replace)" : "Generated via Graph API Explorer"}
+              placeholder={account.hasAccessToken ? "•••••••••••••••• (paste a new one to replace it)" : "Paste your access token"}
               autoComplete="new-password"
               autoFocus
               value={accessToken}
@@ -87,20 +87,20 @@ export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditIn
             <Label htmlFor="edit-clipping-account-id">CLIPPING account ID</Label>
             <Input
               id="edit-clipping-account-id"
-              placeholder="CLIPPING's internal ID for this account — required to submit its Reels"
+              placeholder="Needed before you can submit its Reels"
               autoComplete="off"
               value={clippingAccountId}
               onChange={(e) => setClippingAccountId(e.target.value)}
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="edit-clipping-account-ref">CLIPPING account (linked)</Label>
+            <Label htmlFor="edit-clipping-account-ref">CLIPPING account</Label>
             <Select value={clippingAccountRefId} onValueChange={setClippingAccountRefId}>
               <SelectTrigger id="edit-clipping-account-ref">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">Not linked yet</SelectItem>
+                <SelectItem value="none">Not connected yet</SelectItem>
                 {clippingAccounts?.items.map((clippingAccount) => (
                   <SelectItem key={clippingAccount.id} value={clippingAccount.id}>
                     {clippingAccount.label}
@@ -109,8 +109,7 @@ export function EditInstagramCredentialsDialog({ account, onOpenChange }: EditIn
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Which CLIPPING login (Playwright-backed session, set up on the Settings page) submissions for this
-              Instagram account go through.
+              Which CLIPPING account this Instagram account submits to. Add more accounts on the Settings page.
             </p>
           </div>
         </div>

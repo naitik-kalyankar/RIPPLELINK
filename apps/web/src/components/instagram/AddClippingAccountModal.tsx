@@ -36,7 +36,7 @@ export function AddClippingAccountModal() {
         onSuccess: (account) => {
           toast({
             title: `Added "${account.label}"`,
-            description: 'Click "Log in" next to it below to connect its session.',
+            description: 'Click "Log in" next to it below to connect it.',
             variant: "success",
           });
           setOpen(false);
@@ -58,15 +58,14 @@ export function AddClippingAccountModal() {
         <DialogHeader>
           <DialogTitle>Add CLIPPING Account</DialogTitle>
           <DialogDescription>
-            Creates the account row here — click "Log in" next to it afterward to connect its
-            session (a real browser window opens on this machine). Its login email is
-            detected automatically once you sign in, no need to type it.
+            Give it a name, then click "Log in" afterward — a browser window will open for you
+            to sign in. We'll detect your email automatically, no need to type it.
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-3">
           <div className="grid gap-1.5">
-            <Label htmlFor="clipping-label">Label</Label>
+            <Label htmlFor="clipping-label">Name</Label>
             <Input
               id="clipping-label"
               placeholder="e.g. Main, Client B"
@@ -79,7 +78,7 @@ export function AddClippingAccountModal() {
             <Label htmlFor="clipping-campaign-id">Campaign ID</Label>
             <Input
               id="clipping-campaign-id"
-              placeholder="CLIPPING's campaign ID for this login"
+              placeholder="Found on CLIPPING's campaign page"
               autoComplete="off"
               value={campaignId}
               onChange={(e) => setCampaignId(e.target.value)}

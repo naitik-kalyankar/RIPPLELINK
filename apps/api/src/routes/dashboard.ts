@@ -66,6 +66,46 @@ async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSourc
   return { estimatedPayout: Math.round(total * 100) / 100, qualifyingViews };
 }
 
+/**
+ * "clipping" mode's real number: CLIPPING's own computed payout per login (ClippingAccount.
+ * lastPayout, refreshed every sync — see SyncService.syncPayoutForAccount /
+ * ClippingBrowserManager.getCampaignPageData), summed across whichever accounts are in scope.
+ * This is what actually matches clipping.net's own numbers, since CLIPPING applies its real
+ * 100k-view floor per bounty tag aggregated across all of that bounty's clips — a calculation
+ * this app can't faithfully replicate locally (that's what computeEstimatedPayout above was
+ * trying, and why it drifted from CLIPPING's real figure).
+ */
+async function computeClippingModePayout(instagramAccountIds?: string[]): Promise<PayoutResult> {
+  let clippingAccountIds: string[] | undefined;
+  if (instagramAccountIds) {
+    const refs = await prisma.instagramAccount.findMany({
+      where: { id: { in: instagramAccountIds } },
+      select: { clippingAccountRefId: true },
+    });
+    clippingAccountIds = Array.from(
+      new Set(refs.map((r) => r.clippingAccountRefId).filter((v): v is string => Boolean(v)))
+    );
+  }
+
+  const accounts = await prisma.clippingAccount.findMany({
+    where: { active: true, ...(clippingAccountIds ? { id: { in: clippingAccountIds } } : {}) },
+    select: { lastPayout: true, lastPayoutBountyBreakdown: true },
+  });
+
+  let total = 0;
+  let qualifyingViews = 0;
+  for (const account of accounts) {
+    total += account.lastPayout ?? 0;
+    const breakdown = Array.isArray(account.lastPayoutBountyBreakdown)
+      ? (account.lastPayoutBountyBreakdown as Array<{ views?: unknown }>)
+      : [];
+    for (const entry of breakdown) {
+      if (typeof entry.views === "number") qualifyingViews += entry.views;
+    }
+  }
+  return { estimatedPayout: Math.round(total * 100) / 100, qualifyingViews };
+}
+
 export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/api/dashboard/stats", async (request): Promise<DashboardStats> => {
     const { instagramAccountIds: raw, viewsSource } = request.query as {
@@ -86,7 +126,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
       prisma.reel.count({
         where: { ...accountFilter, clippingSubmission: { is: null }, submissionAttempts: { some: { status: "failed" } } },
       }),
-      computeEstimatedPayout(ids, resolvedViewsSource),
+      resolvedViewsSource === "live" ? computeEstimatedPayout(ids, "live") : computeClippingModePayout(ids),
     ]);
 
     return {

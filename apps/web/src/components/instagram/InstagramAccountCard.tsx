@@ -36,17 +36,12 @@ export function InstagramAccountCard({ account, onEditCredentials }: InstagramAc
             </Tooltip>
           </div>
           <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-            <span>Instagram ID: {account.instagramId}</span>
-            <span className="text-border">·</span>
-            <span>
-              CLIPPING ID:{" "}
-              {account.clippingAccountId ? (
-                <span className="font-mono">{account.clippingAccountId}</span>
-              ) : (
-                <span className="text-warning">Not set — submissions will fail</span>
-              )}
-            </span>
-            <span className="text-border">·</span>
+            {!account.clippingAccountId && (
+              <>
+                <span className="text-warning">Missing CLIPPING account — add it in Credentials</span>
+                <span className="text-border">·</span>
+              </>
+            )}
             <span>Last synced: {formatRelativeTime(account.lastSyncedAt)}</span>
           </p>
         </div>

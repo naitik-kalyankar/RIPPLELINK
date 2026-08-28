@@ -5,6 +5,15 @@ import { apiClient } from "@/lib/apiClient";
 // Server response shape from routes/clippingAccounts.ts's serializeAccount — deliberately
 // distinct from the shared ClippingAccount type, which omits health/session fields that only
 // make sense as a server-computed status snapshot.
+export interface ClippingAccountBountyBreakdownEntry {
+  bounty: string;
+  views: number;
+  rate: number;
+  payout: number;
+  minViewsRequired: number;
+  minViewsReached: boolean;
+}
+
 export interface ClippingAccountStatus {
   id: string;
   label: string;
@@ -19,6 +28,11 @@ export interface ClippingAccountStatus {
   lastError: { message: string; at: string } | null;
   loginInProgress: boolean;
   lastLoginError: string | null;
+  // CLIPPING's own computed payout for this login, refreshed every sync — null until the
+  // first sync after connecting. See routes/clippingAccounts.ts's serializeAccount.
+  lastPayout: number | null;
+  lastPayoutBountyBreakdown: ClippingAccountBountyBreakdownEntry[];
+  lastPayoutFetchedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

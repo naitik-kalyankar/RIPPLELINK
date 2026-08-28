@@ -75,58 +75,69 @@ function decodeEmailFromCookies(cookies: { name: string; value: string }[]): str
   return null;
 }
 
-// CLIPPING's /dashboard/accounts page (a Next.js App Router page) has no separate JSON API
-// for its linked-accounts list — confirmed by watching every response while loading it. The
-// full account list (each with its real internal `_id`, needed for SubmitClipInput.accountId)
-// is instead embedded directly in the page's SSR payload, inside a React Server Components
+// CLIPPING's Next.js App Router pages (dashboard/accounts, dashboard/campaigns/*) have no
+// separate JSON API for their data — confirmed by watching every response while loading them.
+// The real data (linked accounts' internal `_id`s, a campaign's real startDate/days, etc.) is
+// instead embedded directly in the page's SSR payload, inside a React Server Components
 // stream: `self.__next_f.push([1, "<escaped JS string>"])`. That escaped string is plain
-// JS-string escaping, so wrapping it in quotes and JSON.parse-ing it decodes it back to text;
-// from there, bracket-matching (respecting string literals, so a `]` inside e.g. a username
-// can't end the array early) finds exactly where the `"accounts":[...]` array ends, which is
-// then its own valid JSON substring.
-function extractLinkedAccountsFromHtml(html: string): ClippingLinkedAccount[] | null {
-  const pushes = html.matchAll(/self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g);
-  for (const [, escaped] of pushes) {
-    if (!escaped.includes("initialData")) continue;
-    let unescaped: string;
-    try {
-      unescaped = JSON.parse(`"${escaped}"`);
-    } catch {
+// JS-string escaping, so wrapping it in quotes and JSON.parse-ing it decodes it back to text.
+// From there, this walks forward from a `"<key>":<open>` marker counting matching
+// open/close delimiters (respecting string literals, so one inside e.g. a username can't end
+// the object/array early) to find exactly where that value ends — which is then its own valid
+// JSON substring. Shared by extractLinkedAccountsFromHtml (arrays) and extractCampaignFromHtml
+// (objects) below — same trick, different delimiter pair.
+function extractBalancedJsonValue(text: string, marker: string, open: string, close: string): string | null {
+  const markerStart = text.indexOf(marker);
+  if (markerStart === -1) return null;
+
+  let i = markerStart + marker.length - 1; // position of the opening delimiter
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  for (; i < text.length; i++) {
+    const ch = text[i];
+    if (escapeNext) {
+      escapeNext = false;
       continue;
     }
-
-    const marker = '"accounts":[';
-    const markerStart = unescaped.indexOf(marker);
-    if (markerStart === -1) continue;
-
-    let i = markerStart + marker.length - 1; // position of the opening '['
-    let depth = 0;
-    let inString = false;
-    let escapeNext = false;
-    for (; i < unescaped.length; i++) {
-      const ch = unescaped[i];
-      if (escapeNext) {
-        escapeNext = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escapeNext = true;
-        continue;
-      }
-      if (ch === '"') inString = !inString;
-      if (inString) continue;
-      if (ch === "[") depth++;
-      else if (ch === "]") {
-        depth--;
-        if (depth === 0) {
-          i++;
-          break;
-        }
+    if (ch === "\\") {
+      escapeNext = true;
+      continue;
+    }
+    if (ch === '"') inString = !inString;
+    if (inString) continue;
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) {
+        i++;
+        break;
       }
     }
+  }
+  return text.slice(markerStart + marker.length - 1, i);
+}
 
+function findRscPayloads(html: string, mustInclude: string): string[] {
+  const pushes = html.matchAll(/self\.__next_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)/g);
+  const payloads: string[] = [];
+  for (const [, escaped] of pushes) {
+    if (!escaped.includes(mustInclude)) continue;
     try {
-      const raw = JSON.parse(unescaped.slice(markerStart + marker.length - 1, i)) as unknown[];
+      payloads.push(JSON.parse(`"${escaped}"`));
+    } catch {
+      // not decodable — skip
+    }
+  }
+  return payloads;
+}
+
+function extractLinkedAccountsFromHtml(html: string): ClippingLinkedAccount[] | null {
+  for (const unescaped of findRscPayloads(html, "initialData")) {
+    const arrayText = extractBalancedJsonValue(unescaped, '"accounts":[', "[", "]");
+    if (!arrayText) continue;
+    try {
+      const raw = JSON.parse(arrayText) as unknown[];
       return raw
         .filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null)
         .map((r) => ({
@@ -136,6 +147,85 @@ function extractLinkedAccountsFromHtml(html: string): ClippingLinkedAccount[] | 
           platform: String(r.platform ?? ""),
         }))
         .filter((a) => a.id && a.username);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+export interface ClippingCampaignInfo {
+  startDate: string;
+  /** Cycle length in days — CLIPPING has no separate "end date" field, the cycle end is
+   * derived as startDate + days. */
+  days: number;
+  /** The real per-clip view floor CLIPPING enforces before a bounty counts, read straight
+   * from the campaign's own data (confirmed 100,000 on the "Kick Clipping" campaign — NOT
+   * the 1,000 figure the payout calc guessed at before this existed). */
+  minViews: number;
+}
+
+function extractCampaignFromHtml(html: string): ClippingCampaignInfo | null {
+  for (const unescaped of findRscPayloads(html, "campaign")) {
+    const objectText = extractBalancedJsonValue(unescaped, '"campaign":{', "{", "}");
+    if (!objectText) continue;
+    try {
+      const raw = JSON.parse(objectText) as Record<string, unknown>;
+      if (typeof raw.startDate !== "string" || typeof raw.days !== "number") continue;
+      return {
+        startDate: raw.startDate,
+        days: raw.days,
+        minViews: typeof raw.minViews === "number" ? raw.minViews : 0,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+export interface ClipperBountyBreakdownEntry {
+  bounty: string;
+  views: number;
+  rate: number;
+  payout: number;
+  minViewsRequired: number;
+  minViewsReached: boolean;
+}
+
+export interface ClippingClipperStats {
+  totalViews: number;
+  /** CLIPPING's own authoritative payout figure for this login — matches what shows on
+   * clipping.net exactly, unlike this app's local view*rate estimate (which doesn't replicate
+   * CLIPPING's per-bounty-aggregate 100k-view floor). */
+  totalPayout: number;
+  bountyBreakdown: ClipperBountyBreakdownEntry[];
+}
+
+function extractClipperStatsFromHtml(html: string): ClippingClipperStats | null {
+  for (const unescaped of findRscPayloads(html, "clipperStats")) {
+    const objectText = extractBalancedJsonValue(unescaped, '"clipperStats":{', "{", "}");
+    if (!objectText) continue;
+    try {
+      const raw = JSON.parse(objectText) as Record<string, unknown>;
+      const payout = raw.payout as Record<string, unknown> | undefined;
+      if (!payout || typeof payout.totalBountyPayout !== "number") continue;
+      const rawBreakdown = Array.isArray(payout.bountyBreakdown) ? payout.bountyBreakdown : [];
+      return {
+        totalViews: typeof raw.totalViews === "number" ? raw.totalViews : 0,
+        totalPayout: payout.totalBountyPayout,
+        bountyBreakdown: rawBreakdown
+          .filter((b): b is Record<string, unknown> => typeof b === "object" && b !== null)
+          .map((b) => ({
+            bounty: String(b.bounty ?? ""),
+            views: typeof b.views === "number" ? b.views : 0,
+            rate: typeof b.rate === "number" ? b.rate : 0,
+            payout: typeof b.payout === "number" ? b.payout : 0,
+            minViewsRequired: typeof b.minViewsRequired === "number" ? b.minViewsRequired : 0,
+            minViewsReached: Boolean(b.minViewsReached),
+          }))
+          .filter((b) => b.bounty),
+      };
     } catch {
       continue;
     }
@@ -280,6 +370,47 @@ class ClippingBrowserManager {
     } finally {
       await page.close();
     }
+  }
+
+  /** Loads CLIPPING's campaign page ONCE and pulls both the real cycle data (startDate/days/
+   * minViews) and this login's own clipperStats (its real payout + bounty breakdown) out of
+   * the same SSR payload — the two thin wrappers below exist so callers that only need one
+   * piece don't have to know that, but both still only pay for a single page load when used
+   * together (see SyncService, which wants both). `slug` defaults to "kick-clipping", the one
+   * campaign every account in this app is currently on (its campaignId matches the page's own
+   * `_id`); pass a different slug if a ClippingAccount is ever added on a different campaign. */
+  async getCampaignPageData(
+    account: Pick<ClippingAccount, "id" | "storageStatePath">,
+    slug = "kick-clipping"
+  ): Promise<{ campaign: ClippingCampaignInfo | null; clipperStats: ClippingClipperStats | null }> {
+    const context = await this.getContext(account);
+    const page = await context.newPage();
+    try {
+      await page.goto(`https://${CLIPPING_DOMAIN}/dashboard/campaigns/${slug}`, { waitUntil: "networkidle", timeout: 30_000 });
+      const html = await page.content();
+      return { campaign: extractCampaignFromHtml(html), clipperStats: extractClipperStatsFromHtml(html) };
+    } catch (error) {
+      throw new ClippingApiError(
+        `Failed to read campaign info from CLIPPING: ${error instanceof Error ? error.message : String(error)}`,
+        "unavailable"
+      );
+    } finally {
+      await page.close();
+    }
+  }
+
+  async getCampaignInfo(
+    account: Pick<ClippingAccount, "id" | "storageStatePath">,
+    slug = "kick-clipping"
+  ): Promise<ClippingCampaignInfo | null> {
+    return (await this.getCampaignPageData(account, slug)).campaign;
+  }
+
+  async getClipperStats(
+    account: Pick<ClippingAccount, "id" | "storageStatePath">,
+    slug = "kick-clipping"
+  ): Promise<ClippingClipperStats | null> {
+    return (await this.getCampaignPageData(account, slug)).clipperStats;
   }
 
   /** Lets Supabase's own client-side code refresh a stale token by loading a real page in

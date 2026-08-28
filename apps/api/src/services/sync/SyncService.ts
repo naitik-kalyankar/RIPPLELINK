@@ -1,8 +1,11 @@
 import type { SyncResult } from "@kick-manager/shared";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { getInstagramServiceForAccount } from "../instagram/index.js";
 import { clippingService, getClippingProviderForAccount } from "../clipping/index.js";
 import type { ClippingSubmissionRaw } from "../clipping/ClippingService.js";
+import { clippingBrowserManager } from "../clipping/ClippingBrowserManager.js";
+import type { ClippingAccount } from "@prisma/client";
 import { creatorDetectionService } from "../creators/CreatorDetectionService.js";
 import { activityLogService } from "../activity/ActivityLogService.js";
 import { reelMatchingService } from "../reels/ReelMatchingService.js";
@@ -52,21 +55,32 @@ export class SyncService {
       }
 
       const detection = await creatorDetectionService.resolveForReel(raw.thumbnailUrl);
-      if (detection.status === "mapped") detected += 1;
 
-      await prisma.reel.create({
-        data: {
-          instagramAccountId: account.id,
-          instagramReelId: raw.instagramReelId,
-          instagramUrl: raw.instagramUrl,
-          thumbnailUrl: raw.thumbnailUrl,
-          publishedAt: raw.publishedAt,
-          views: raw.views,
-          creatorId: detection.creatorId,
-          detectedIdentifier: detection.detectedIdentifier,
-          creatorDetectionStatus: detection.status,
-        },
-      });
+      try {
+        await prisma.reel.create({
+          data: {
+            instagramAccountId: account.id,
+            instagramReelId: raw.instagramReelId,
+            instagramUrl: raw.instagramUrl,
+            thumbnailUrl: raw.thumbnailUrl,
+            publishedAt: raw.publishedAt,
+            views: raw.views,
+            creatorId: detection.creatorId,
+            detectedIdentifier: detection.detectedIdentifier,
+            creatorDetectionStatus: detection.status,
+          },
+        });
+      } catch (error) {
+        // A concurrent sync of this same account (e.g. two "Sync Now" clicks racing) can
+        // create this Reel between our findUnique check above and this create — the unique
+        // constraint on (instagramAccountId, instagramReelId) is what's supposed to catch
+        // that. Not a real failure, just redundant work losing the race; skip it rather than
+        // crashing the whole sync. Any other error is a genuine problem and still propagates.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") continue;
+        throw error;
+      }
+
+      if (detection.status === "mapped") detected += 1;
       upserted += 1;
     }
 
@@ -111,7 +125,7 @@ export class SyncService {
    * still relies on the legacy session for its submissions, so its clips must keep showing up
    * here too. Each source (legacy + every account) is fetched independently so one failing
    * source doesn't block the others, mirroring syncInstagram()'s per-account pattern. */
-  private async fetchAllClips(errors: string[]): Promise<ClippingSubmissionRaw[]> {
+  private async fetchAllClips(errors: string[], payoutErrors: string[]): Promise<ClippingSubmissionRaw[]> {
     const accounts = await prisma.clippingAccount.findMany({ where: { active: true } });
     if (accounts.length === 0) return clippingService.getUploadedClips();
 
@@ -135,20 +149,51 @@ export class SyncService {
         errors.push(`${account.label}: ${message}`);
         await activityLogService.log(`CLIPPING sync failed for ${account.label}: ${message}`, "error");
       }
+
+      // Separate error list on purpose: a payout-scrape failure (a different Playwright page
+      // load, not the cookie-based HTTP API used for clips above) must never gate the
+      // stale-submission cleanup below, which only cares about clip-fetch completeness — those
+      // are unrelated concerns, so coupling them would make a flaky payout scrape silently
+      // stop real cleanup from ever running.
+      await this.syncPayoutForAccount(account, payoutErrors);
     }
     return collected;
+  }
+
+  /** Refreshes ClippingAccount.lastPayout/lastPayoutBountyBreakdown from CLIPPING's own
+   * campaign page — see ClippingBrowserManager.getCampaignPageData. This is what makes the
+   * dashboard's "CLIPPING" payout mode match clipping.net exactly instead of a local estimate
+   * that doesn't replicate CLIPPING's per-bounty-aggregate view floor. */
+  private async syncPayoutForAccount(account: ClippingAccount, errors: string[]): Promise<void> {
+    try {
+      const { clipperStats } = await clippingBrowserManager.getCampaignPageData(account);
+      if (!clipperStats) return; // no session yet, or the page didn't render clipperStats — leave cached value as-is
+      await prisma.clippingAccount.update({
+        where: { id: account.id },
+        data: {
+          lastPayout: clipperStats.totalPayout,
+          lastPayoutBountyBreakdown: clipperStats.bountyBreakdown as unknown as Prisma.InputJsonValue,
+          lastPayoutFetchedAt: new Date(),
+        },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error.";
+      errors.push(`${account.label} (payout): ${message}`);
+      await activityLogService.log(`CLIPPING payout sync failed for ${account.label}: ${message}`, "error");
+    }
   }
 
   async syncClipping(): Promise<
     Pick<SyncResult, "clippingSubmissionsFetched" | "clippingSubmissionsUpserted" | "newlyLinked" | "newlyUnlinked" | "errors">
   > {
     const errors: string[] = [];
+    const payoutErrors: string[] = [];
     let fetched = 0;
     let upserted = 0;
     let removedStale = 0;
 
     try {
-      const clips = await this.fetchAllClips(errors);
+      const clips = await this.fetchAllClips(errors, payoutErrors);
       fetched = clips.length;
 
       for (const clip of clips) {
@@ -241,7 +286,7 @@ export class SyncService {
       clippingSubmissionsUpserted: upserted,
       newlyLinked,
       newlyUnlinked: removedStale,
-      errors,
+      errors: [...errors, ...payoutErrors],
     };
   }
 

@@ -1,9 +1,11 @@
-import { Check, ExternalLink, Eye, Link2, Loader2, RotateCcw } from "lucide-react";
+import { Check, DollarSign, ExternalLink, Eye, Link2, Loader2, RotateCcw } from "lucide-react";
 import type { Reel } from "@kick-manager/shared";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { cn, formatCount, formatDate, formatRelativeShort } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { estimateReelPayout } from "@/lib/reelPayout";
+import { cn, formatCount, formatCurrency, formatDate, formatRelativeShort } from "@/lib/utils";
 
 interface ReelCardProps {
   reel: Reel;
@@ -11,11 +13,13 @@ interface ReelCardProps {
   onToggleSelect: (id: string) => void;
   onOpenPreview: (reel: Reel) => void;
   onLink: (reel: Reel) => void;
+  bountyRateByName: Map<string, number>;
 }
 
-export function ReelCard({ reel, selected, onToggleSelect, onOpenPreview, onLink }: ReelCardProps) {
+export function ReelCard({ reel, selected, onToggleSelect, onOpenPreview, onLink, bountyRateByName }: ReelCardProps) {
   const creatorLabel = reel.creator?.displayName ?? "Unknown creator";
   const status = reel.linkStatus;
+  const estimatedPayout = estimateReelPayout(reel, bountyRateByName);
 
   return (
     <Card className="group relative flex flex-col overflow-hidden transition-shadow hover:shadow-md">
@@ -35,14 +39,26 @@ export function ReelCard({ reel, selected, onToggleSelect, onOpenPreview, onLink
         />
         {(reel.views !== null || reel.publishedAt) && (
           <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-4 text-[11px] font-medium text-white">
-            {reel.views !== null ? (
-              <span className="flex items-center gap-1">
-                <Eye className="h-3 w-3" /> {formatCount(reel.views)}
-              </span>
-            ) : (
-              <span />
-            )}
-            {reel.publishedAt && <span>{formatRelativeShort(reel.publishedAt)}</span>}
+            <span className="flex min-w-0 items-center gap-2">
+              {reel.views !== null && (
+                <span className="flex shrink-0 items-center gap-1">
+                  <Eye className="h-3 w-3" /> {formatCount(reel.views)}
+                </span>
+              )}
+              {estimatedPayout !== null && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="flex shrink-0 items-center gap-0.5 text-success">
+                      <DollarSign className="h-3 w-3" /> {formatCurrency(estimatedPayout)}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-56 text-xs">
+                    Our estimate for this Reel. The exact amount from CLIPPING may be a bit different.
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </span>
+            {reel.publishedAt && <span className="shrink-0">{formatRelativeShort(reel.publishedAt)}</span>}
           </div>
         )}
       </button>

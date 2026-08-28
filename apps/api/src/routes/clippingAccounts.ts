@@ -81,6 +81,9 @@ function serializeAccount(account: {
   active: boolean;
   lastUsedAt: Date | null;
   lastLoginAt: Date | null;
+  lastPayout: number | null;
+  lastPayoutBountyBreakdown: unknown;
+  lastPayoutFetchedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -101,6 +104,11 @@ function serializeAccount(account: {
     lastError: health.lastError,
     loginInProgress: clippingBrowserManager.isLoggingIn(account.id),
     lastLoginError: clippingBrowserManager.getLastLoginError(account.id),
+    // CLIPPING's own computed payout for this login, refreshed every sync — see
+    // SyncService.syncPayoutForAccount. Null until the first sync after this account connects.
+    lastPayout: account.lastPayout,
+    lastPayoutBountyBreakdown: Array.isArray(account.lastPayoutBountyBreakdown) ? account.lastPayoutBountyBreakdown : [],
+    lastPayoutFetchedAt: account.lastPayoutFetchedAt?.toISOString() ?? null,
     createdAt: account.createdAt.toISOString(),
     updatedAt: account.updatedAt.toISOString(),
   };
@@ -108,7 +116,7 @@ function serializeAccount(account: {
 
 export async function clippingAccountsRoutes(app: FastifyInstance) {
   app.get("/api/clipping-accounts", async () => {
-    const accounts = await prisma.clippingAccount.findMany({ orderBy: { createdAt: "asc" } });
+    const accounts = await prisma.clippingAccount.findMany({ where: { active: true }, orderBy: { createdAt: "asc" } });
     return { items: accounts.map(serializeAccount) };
   });
 

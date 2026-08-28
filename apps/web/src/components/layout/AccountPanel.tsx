@@ -82,7 +82,7 @@ function AllAccountsRow({ selected, alwaysExpanded, onSelect }: { selected: bool
       </span>
       <div className={cn("min-w-0 flex-1", !alwaysExpanded && "hidden lg:block")}>
         <div className="truncate text-xs font-medium text-foreground">All Accounts</div>
-        <div className="text-[11px] text-muted-foreground">Everything, unscoped</div>
+        <div className="text-[11px] text-muted-foreground">Show everything</div>
       </div>
     </RowShell>
   );

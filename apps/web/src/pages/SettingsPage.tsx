@@ -14,7 +14,7 @@ import {
 import { useClippingScope } from "@/lib/clippingScope";
 import { AddClippingAccountModal } from "@/components/instagram/AddClippingAccountModal";
 import { useToast } from "@/components/ui/toast";
-import { cn, formatRelativeTime } from "@/lib/utils";
+import { cn, formatCurrency, formatRelativeTime } from "@/lib/utils";
 
 export function SettingsPage() {
   const [platformKind, setPlatformKind] = useState<string>("…");
@@ -64,16 +64,12 @@ export function SettingsPage() {
         </CardHeader>
         <CardContent className="grid gap-3">
           <p className="text-xs text-muted-foreground">
-            Each CLIPPING login runs as its own persistent, Playwright-backed browser session —
-            multiple accounts can be active at once. "Set active" scopes the Dashboard, Reels,
-            Upload Queue, and Clipping pages down to just that account's Instagram accounts
-            (also switchable from the sidebar).
+            Add each of your CLIPPING accounts here and stay signed into all of them at once.
+            Click "Set active" to switch the rest of the app to just that account's data — you
+            can also switch from the sidebar.
           </p>
           {!clippingAccounts?.items.length ? (
-            <p className="text-sm text-muted-foreground">
-              No CLIPPING accounts added yet — every Instagram account still uses the legacy,
-              single-session cookie configured in the environment.
-            </p>
+            <p className="text-sm text-muted-foreground">No CLIPPING accounts added yet.</p>
           ) : (
             <div className="grid gap-2">
               {clippingAccounts.items.map((account) => {
@@ -98,25 +94,30 @@ export function SettingsPage() {
                           )}
                         </div>
                         <p className="mt-0.5 text-xs text-muted-foreground">
-                          Campaign: <span className="font-mono">{account.campaignId}</span> · Last login:{" "}
-                          {formatRelativeTime(account.lastLoginAt)} · Last used: {formatRelativeTime(account.lastUsedAt)}
+                          Signed in {formatRelativeTime(account.lastLoginAt)} · Last synced {formatRelativeTime(account.lastUsedAt)}
                         </p>
+                        {account.lastPayout != null && (
+                          <p className="mt-1 text-xs">
+                            <span className="font-medium text-foreground">{formatCurrency(account.lastPayout)}</span>
+                            <span className="text-muted-foreground"> earned so far · updated {formatRelativeTime(account.lastPayoutFetchedAt)}</span>
+                          </p>
+                        )}
                       </div>
                       {account.loginInProgress ? (
-                        <StatusDot label="Waiting for login…" color="muted" tooltip="A browser window is open on this machine — log in there to finish." pulse />
+                        <StatusDot label="Signing in…" color="muted" tooltip="Finish signing in in the window that opened." pulse />
                       ) : !account.hasStorageState ? (
                         <StatusDot
-                          label="Not logged in"
+                          label="Not signed in"
                           color="muted"
                           tooltip={account.lastLoginError ?? "Click Log in to connect this account."}
                         />
                       ) : account.healthy ? (
-                        <StatusDot label="Connected" color="success" tooltip="Last CLIPPING request from this account succeeded." />
+                        <StatusDot label="Connected" color="success" tooltip="Everything's working." />
                       ) : (
                         <StatusDot
                           label="Error"
                           color="destructive"
-                          tooltip={account.lastError?.message ?? "The last CLIPPING request from this account failed."}
+                          tooltip={account.lastError?.message ?? "Something went wrong with this account."}
                         />
                       )}
                     </div>
@@ -147,26 +148,26 @@ export function SettingsPage() {
                         variant="outline"
                         size="sm"
                         disabled={!account.hasStorageState || syncLinked.isPending}
-                        title={!account.hasStorageState ? "Log in first to read its linked accounts." : undefined}
+                        title={!account.hasStorageState ? "Log in first to connect its Instagram accounts." : undefined}
                         onClick={() =>
                           syncLinked.mutate(account.id, {
                             onSuccess: (result) => {
                               const mismatches = result.items.filter((i) => i.mismatch);
                               toast({
-                                title: `${result.matchedCount} linked account(s) matched`,
+                                title: `Found ${result.matchedCount} Instagram account(s)`,
                                 description:
-                                  `${result.updatedCount} filled in.` +
+                                  `${result.updatedCount} connected.` +
                                   (mismatches.length > 0
-                                    ? ` ${mismatches.length} existing ID(s) look wrong — check the activity log.`
+                                    ? ` ${mismatches.length} needed fixing — see the activity log.`
                                     : ""),
                                 variant: mismatches.length > 0 ? "default" : "success",
                               });
                             },
-                            onError: (error) => toast({ title: "Sync failed", description: error.message, variant: "destructive" }),
+                            onError: (error) => toast({ title: "Couldn't connect accounts", description: error.message, variant: "destructive" }),
                           })
                         }
                       >
-                        Sync linked accounts
+                        Find Instagram accounts
                       </Button>
                       <Button
                         variant="ghost"

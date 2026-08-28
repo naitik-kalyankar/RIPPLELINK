@@ -1,11 +1,15 @@
 import { useState } from "react";
-import { Film, Link2, Eye, AlertTriangle, DollarSign, Clock } from "lucide-react";
+import { Film, Link2, Eye, AlertTriangle, DollarSign, Clock, ListTree } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useActivityLog, useDashboardStats, type ViewsSource } from "@/api/dashboard";
+import { useClippingCampaign, type ClippingCampaignInfo } from "@/api/clipping";
+import { useClippingAccounts } from "@/api/clippingAccounts";
 import { useClippingScope } from "@/lib/clippingScope";
+import { PayoutBreakdownModal } from "@/components/dashboard/PayoutBreakdownModal";
 import { formatCurrency, formatRelativeTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
@@ -36,7 +40,7 @@ function useViewsSourcePreference() {
 const STAT_CARDS = [
   { key: "totalReels", label: "Total Reels", icon: Film, tone: "primary" },
   { key: "linked", label: "Linked", icon: Link2, tone: "success" },
-  { key: "qualifyingViews", label: "Qualifying Views", icon: Eye, tone: "primary" },
+  { key: "qualifyingViews", label: "Views Counted", icon: Eye, tone: "primary" },
 ] as const;
 
 const TONE_CLASS: Record<string, string> = {
@@ -51,11 +55,23 @@ const levelVariant = { info: "secondary", warning: "warning", error: "destructiv
 const RING_RADIUS = 40;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-/** Days remaining (and elapsed fraction) in the current calendar month, used as the payout-cycle
- * countdown. There's no cycle end-date in the API yet (CLIPPING submissions carry a cycleId but
- * no exposed end date), so this is a calendar-month proxy rather than a real cycle date. */
-function usePayoutCycle() {
+/** Days remaining (and elapsed fraction) in the real CLIPPING campaign cycle, read from its
+ * own startDate + days (see api/clipping.ts's useClippingCampaign / ClippingBrowserManager's
+ * getCampaignInfo — scraped straight off CLIPPING's campaign page, cached ~6hr server-side).
+ * Falls back to a calendar-month proxy only when that real data isn't available yet (e.g. no
+ * CLIPPING account has ever been logged in) — so this never shows nothing. */
+function usePayoutCycle(campaign: ClippingCampaignInfo | null | undefined) {
   const now = new Date();
+
+  if (campaign) {
+    const start = new Date(campaign.startDate);
+    const end = new Date(start.getTime() + campaign.days * 86_400_000);
+    const daysLeft = Math.max(0, Math.ceil((end.getTime() - now.getTime()) / 86_400_000));
+    const daysElapsed = Math.max(0, campaign.days - daysLeft);
+    const progress = Math.min(1, Math.max(0, daysElapsed / campaign.days));
+    return { daysLeft, daysElapsed, progress };
+  }
+
   const totalDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
   const daysLeft = Math.max(0, Math.ceil((endOfMonth.getTime() - now.getTime()) / 86_400_000));
@@ -69,7 +85,14 @@ export function DashboardPage() {
   const [viewsSource, setViewsSource] = useViewsSourcePreference();
   const { data: stats, isLoading, isError } = useDashboardStats(scopedInstagramAccountIds, viewsSource);
   const { data: activity } = useActivityLog();
-  const { daysLeft, daysElapsed, progress } = usePayoutCycle();
+  const { data: campaignData } = useClippingCampaign();
+  const { data: clippingAccountsData } = useClippingAccounts();
+  const { daysLeft, daysElapsed, progress } = usePayoutCycle(campaignData?.campaign);
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+
+  const accountsInScope = (clippingAccountsData?.items ?? []).filter(
+    (a) => !selectedAccount || a.id === selectedAccount.id
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -79,8 +102,8 @@ export function DashboardPage() {
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {selectedAccount
-            ? `Instagram Reels and CLIPPING submissions for accounts linked to "${selectedAccount.label}".`
-            : "An overview of your Instagram Reels and CLIPPING submissions."}
+            ? `Reels and CLIPPING submissions for "${selectedAccount.label}".`
+            : "An overview of your Reels and CLIPPING submissions."}
         </p>
       </div>
 
@@ -133,22 +156,34 @@ export function DashboardPage() {
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs">
                   {viewsSource === "live"
-                    ? "Using this app's own Instagram view counts (updated on every sync) — CLIPPING's own numbers can lag up to ~12hr behind."
-                    : "Using CLIPPING's own reported view counts, which can lag up to ~12hr behind Instagram's real numbers."}
+                    ? "Our own estimate, based on views we've seen most recently. CLIPPING's numbers can take up to 12 hours to catch up."
+                    : "The exact amount CLIPPING has calculated, updated every time you sync."}
                 </TooltipContent>
               </Tooltip>
             </CardHeader>
-            <CardContent className="relative p-6 pt-0">
+            <CardContent className="relative flex flex-col gap-3 p-6 pt-0">
               {isLoading || !stats ? (
                 <Skeleton className="h-12 w-48" />
               ) : (
                 <>
-                  <p className="text-5xl font-semibold tabular-nums tracking-tight">
-                    {formatCurrency(stats.estimatedPayout)}
-                  </p>
-                  <p className="mt-2 text-sm font-medium text-muted-foreground">
-                    USDT (ETH) · {viewsSource === "live" ? "live Instagram views" : "CLIPPING's reported views"}
-                  </p>
+                  <div>
+                    <p className="text-5xl font-semibold tabular-nums tracking-tight">
+                      {formatCurrency(stats.estimatedPayout)}
+                    </p>
+                    <p className="mt-2 text-sm font-medium text-muted-foreground">
+                      USDT (ETH) · {viewsSource === "live" ? "our estimate" : "from CLIPPING"}
+                    </p>
+                  </div>
+                  {viewsSource === "clipping" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-fit"
+                      onClick={() => setBreakdownOpen(true)}
+                    >
+                      <ListTree className="h-3.5 w-3.5" /> View breakdown
+                    </Button>
+                  )}
                 </>
               )}
             </CardContent>
@@ -252,6 +287,8 @@ export function DashboardPage() {
           </Card>
         </div>
       )}
+
+      <PayoutBreakdownModal open={breakdownOpen} onOpenChange={setBreakdownOpen} accounts={accountsInScope} />
     </div>
   );
 }

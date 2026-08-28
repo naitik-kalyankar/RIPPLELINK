@@ -30,6 +30,26 @@ export function useClippingStatus() {
   });
 }
 
+export interface ClippingCampaignInfo {
+  startDate: string;
+  /** Cycle length in days — the real end date is startDate + days; CLIPPING has no separate
+   * end-date field. */
+  days: number;
+  minViews: number;
+}
+
+/** Real campaign cycle data read off CLIPPING's own campaign page (cached server-side, ~6hr) —
+ * not a calendar-month guess. `campaign` is null if no connected CLIPPING account could be
+ * reached to read it (e.g. nothing logged in yet), in which case callers should fall back to
+ * an approximation rather than show nothing. */
+export function useClippingCampaign() {
+  return useQuery({
+    queryKey: ["clipping-campaign"],
+    queryFn: () => apiClient.get<{ campaign: ClippingCampaignInfo | null }>("/api/clipping/campaign"),
+    staleTime: 30 * 60_000,
+  });
+}
+
 const FALLBACK_CAMPAIGN_ID = "camp_kick_clipping";
 
 /** The campaign is fixed to CLIPPING_CAMPAIGN_ID server-side (real in live mode) — there's

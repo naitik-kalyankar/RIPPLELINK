@@ -85,6 +85,18 @@ model ClippingAccount {
   active           Boolean   @default(true)
   lastUsedAt       DateTime?
   lastLoginAt      DateTime?
+
+  // CLIPPING's own computed payout for this login, read straight off its campaign page's
+  // clipperStats (see ClippingBrowserManager.getCampaignPageData) — refreshed every sync, not
+  // derived from local Reel/ClippingSubmission data. This is what actually matches
+  // clipping.net's own numbers; the dashboard's separate "Live" estimate is a local
+  // approximation using this app's own Instagram sync, not this value.
+  lastPayout                Float?
+  // Array of { bounty, views, rate, payout, minViewsRequired, minViewsReached } — CLIPPING's
+  // own per-bounty breakdown for this login, same source as lastPayout above.
+  lastPayoutBountyBreakdown Json?
+  lastPayoutFetchedAt       DateTime?
+
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 

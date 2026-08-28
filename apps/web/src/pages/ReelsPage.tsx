@@ -5,12 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { useBulkLinkReels, useReels, type ReelsFilters } from "@/api/reels";
-import { useCampaignId } from "@/api/clipping";
+import { useCampaignId, useClippingBounties } from "@/api/clipping";
 import { useClippingScope } from "@/lib/clippingScope";
+import { buildBountyRateMap } from "@/lib/reelPayout";
 import { ReelCard } from "@/components/reels/ReelCard";
 import { ReelFilters } from "@/components/reels/ReelFilters";
 import { LinkReelModal } from "@/components/reels/LinkReelModal";
 import { ReelPreviewModal } from "@/components/reels/ReelPreviewModal";
+import { BulkBountyAssignModal } from "@/components/reels/BulkBountyAssignModal";
 import { cn } from "@/lib/utils";
 
 export function ReelsPage() {
@@ -19,6 +21,12 @@ export function ReelsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [linkTarget, setLinkTarget] = useState<Reel | null>(null);
   const [previewTarget, setPreviewTarget] = useState<Reel | null>(null);
+  // Reels from the current bulk-link attempt that have no detected creator — CLIPPING has no
+  // blank/unknown bounty, so each of these needs one picked by hand before anything submits.
+  // Kept separate from `pendingBulkReelIds` (the full batch) since only some of the selected
+  // Reels may need this step.
+  const [bountyQueue, setBountyQueue] = useState<Reel[] | null>(null);
+  const [pendingBulkReelIds, setPendingBulkReelIds] = useState<string[]>([]);
 
   const { selectedAccount, scopedInstagramAccountIds } = useClippingScope();
   // The page's own "Instagram account" filter always wins when set — the broader CLIPPING
@@ -30,6 +38,8 @@ export function ReelsPage() {
   const { data, isLoading } = useReels(effectiveFilters);
   const bulkLink = useBulkLinkReels();
   const campaignId = useCampaignId();
+  const { data: bountiesData } = useClippingBounties();
+  const bountyRateByName = buildBountyRateMap(bountiesData?.items ?? []);
   const { toast } = useToast();
 
   const toggleSelect = (id: string) => {
@@ -41,10 +51,9 @@ export function ReelsPage() {
     });
   };
 
-  const handleBulkLink = () => {
-    const reelIds = Array.from(selected);
+  const submitBulk = (reelIds: string[], bountyTags?: Record<string, string>) => {
     bulkLink.mutate(
-      { reelIds, campaignId },
+      { reelIds, campaignId, bountyTags },
       {
         onSuccess: (result) => {
           const successCount = result.results.filter((r) => r.success).length;
@@ -57,6 +66,22 @@ export function ReelsPage() {
         },
       }
     );
+  };
+
+  const handleBulkLink = () => {
+    const reelIds = Array.from(selected);
+    const selectedReels = (data?.items ?? []).filter((r) => selected.has(r.id));
+    // CLIPPING has no blank/unknown bounty — a Reel with no detected creator can't be
+    // submitted as-is, so collect a bounty for each of those up front instead of letting
+    // them fail silently inside the batch.
+    const needsBounty = selectedReels.filter((r) => !r.creator?.detectedIdentifier);
+
+    if (needsBounty.length > 0) {
+      setPendingBulkReelIds(reelIds);
+      setBountyQueue(needsBounty);
+      return;
+    }
+    submitBulk(reelIds);
   };
 
   return (
@@ -129,6 +154,7 @@ export function ReelsPage() {
               onToggleSelect={toggleSelect}
               onOpenPreview={setPreviewTarget}
               onLink={setLinkTarget}
+              bountyRateByName={bountyRateByName}
             />
           ))}
         </div>
@@ -165,6 +191,20 @@ export function ReelsPage() {
 
       <LinkReelModal reel={linkTarget} onOpenChange={(open) => !open && setLinkTarget(null)} />
       <ReelPreviewModal reel={previewTarget} onOpenChange={(open) => !open && setPreviewTarget(null)} />
+      {bountyQueue && (
+        <BulkBountyAssignModal
+          reels={bountyQueue}
+          onCancel={() => {
+            setBountyQueue(null);
+            setPendingBulkReelIds([]);
+          }}
+          onComplete={(bountyTags) => {
+            setBountyQueue(null);
+            submitBulk(pendingBulkReelIds, bountyTags);
+            setPendingBulkReelIds([]);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -17,8 +17,41 @@ import {
   updateActiveClippingIdentity,
   clearActiveClippingIdentity,
 } from "../lib/clippingIdentity.js";
+import { clippingBrowserManager, type ClippingCampaignInfo } from "../services/clipping/ClippingBrowserManager.js";
+
+// Campaign cycle data (real startDate/days/minViews, read off CLIPPING's own campaign page —
+// see ClippingBrowserManager.getCampaignInfo) barely changes, so it's cached in-memory rather
+// than re-scraping a real page on every dashboard load. Same simple module-level pattern as
+// clippingIdentity.ts.
+let campaignInfoCache: { info: ClippingCampaignInfo; fetchedAt: number } | null = null;
+const CAMPAIGN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+async function getCachedCampaignInfo(): Promise<ClippingCampaignInfo | null> {
+  if (campaignInfoCache && Date.now() - campaignInfoCache.fetchedAt < CAMPAIGN_CACHE_TTL_MS) {
+    return campaignInfoCache.info;
+  }
+
+  const accounts = await prisma.clippingAccount.findMany({ where: { active: true } });
+  for (const account of accounts) {
+    try {
+      const info = await clippingBrowserManager.getCampaignInfo(account);
+      if (info) {
+        campaignInfoCache = { info, fetchedAt: Date.now() };
+        return info;
+      }
+    } catch {
+      // this account's session may not be logged in yet — try the next one
+    }
+  }
+  return null;
+}
 
 export async function clippingRoutes(app: FastifyInstance) {
+  app.get("/api/clipping/campaign", async () => {
+    const info = await getCachedCampaignInfo();
+    return { campaign: info };
+  });
+
   app.get("/api/clipping/clips", async (request) => {
     const { page = "1", limit = "20", instagramAccountIds } = request.query as {
       page?: string;

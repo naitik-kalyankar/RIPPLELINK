@@ -111,8 +111,15 @@ export type LinkReelInput = z.infer<typeof linkReelSchema>;
 export const bulkLinkSchema = z.object({
   reelIds: z.array(z.string().min(1)).min(1),
   campaignId: z.string().min(1),
+  // Fallback bounty tag applied to any Reel not covered by bountyTags below — kept for
+  // callers that only ever submit Reels sharing one bounty.
   bountyTag: z.string().min(1).optional(),
   accountId: z.string().min(1).optional(),
+  // Per-Reel bounty tag overrides, keyed by reelId — CLIPPING has no "unknown"/blank bounty,
+  // so a Reel with no detected creator needs one collected from the user (see
+  // BulkBountyAssignModal) before it can be submitted; this is how those per-Reel choices
+  // reach the bulk endpoint without forcing every Reel in the batch onto the same tag.
+  bountyTags: z.record(z.string().min(1)).optional(),
 });
 export type BulkLinkInput = z.infer<typeof bulkLinkSchema>;
 
