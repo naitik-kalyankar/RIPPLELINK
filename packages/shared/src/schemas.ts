@@ -57,20 +57,6 @@ export const updateClippingAccountSchema = z.object({
 });
 export type UpdateClippingAccountInput = z.infer<typeof updateClippingAccountSchema>;
 
-export const updateClippingSessionCookieSchema = z.object({
-  cookie: z.string().min(1),
-  // Decoded client-side by the browser extension from the Supabase access token embedded in
-  // the cookie (a JWT — readable without any secret, just base64). Identifies which CLIPPING
-  // login is currently active in the browser; optional because older extension versions won't
-  // send it, and decoding can fail if Supabase changes its cookie/token shape.
-  identity: z
-    .object({
-      userId: z.string().min(1),
-      email: z.string().min(1).nullable(),
-    })
-    .optional(),
-});
-
 export const updateClippingIdentitySchema = z
   .object({
     userId: z.string().min(1).nullable().optional(),
@@ -81,7 +67,6 @@ export const updateClippingIdentitySchema = z
     message: "Provide at least one of userId, email, or displayName.",
   });
 export type UpdateClippingIdentityInput = z.infer<typeof updateClippingIdentitySchema>;
-export type UpdateClippingSessionCookieInput = z.infer<typeof updateClippingSessionCookieSchema>;
 
 export const reelsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

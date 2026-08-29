@@ -91,10 +91,19 @@ export class HttpClippingProvider implements ClippingService {
         await this.config.refresh();
         return this.requestInner<T>(path, init, true);
       }
+      // `refresh` being present (a per-ClippingAccount, Playwright-backed provider) means a
+      // refresh was already attempted and CLIPPING STILL rejected the retried request — a
+      // genuinely dead server-side session, not a stale local cookie. The old
+      // "copy CLIPPING_SESSION_COOKIE from devtools" instructions only apply to the legacy
+      // single-cookie provider (no `refresh`), which no longer exists in this app's normal
+      // flow — don't show them for a per-account failure.
       throw new ClippingApiError(
-        "CLIPPING session expired or invalid — refresh CLIPPING_SESSION_COOKIE with a fresh " +
-          "value copied from your logged-in browser session (devtools → Network → any " +
-          "clipping.net request → Request Headers → Cookie).",
+        this.config.refresh
+          ? "CLIPPING rejected this account's session even after a refresh attempt — it's likely been " +
+            "signed out server-side. Re-log in to this account from the Settings page."
+          : "CLIPPING session expired or invalid — refresh CLIPPING_SESSION_COOKIE with a fresh " +
+            "value copied from your logged-in browser session (devtools → Network → any " +
+            "clipping.net request → Request Headers → Cookie).",
         "auth"
       );
     }

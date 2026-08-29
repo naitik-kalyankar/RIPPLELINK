@@ -199,7 +199,7 @@ export function AccountPanel({ alwaysExpanded = false }: AccountPanelProps) {
           </button>
         )}
       </div>
-      <div className="flex flex-col gap-0.5 rounded-lg border border-border/60 bg-accent/30 p-1">
+      <div className="flex max-h-72 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border/60 bg-accent/30 p-1 scrollbar-thin">
         {showAllAccountsRow && (
           <AllAccountsRow selected={!selectedId} alwaysExpanded={alwaysExpanded} onSelect={() => setSelectedId(null)} />
         )}

@@ -13,12 +13,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
 import { useCreateClippingAccount } from "@/api/clippingAccounts";
+import { useDefaultClippingCampaignId } from "@/lib/clippingCampaignDefault";
 import { Plus } from "lucide-react";
 
 export function AddClippingAccountModal() {
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState("");
-  const [campaignId, setCampaignId] = useState("");
+  const { value: defaultCampaignId } = useDefaultClippingCampaignId();
+  const [campaignId, setCampaignId] = useState(defaultCampaignId);
   const create = useCreateClippingAccount();
   const { toast } = useToast();
 
@@ -26,7 +28,7 @@ export function AddClippingAccountModal() {
 
   const reset = () => {
     setLabel("");
-    setCampaignId("");
+    setCampaignId(defaultCampaignId);
   };
 
   const handleSubmit = () => {

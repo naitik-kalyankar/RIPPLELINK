@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
   linkReelSchema,
-  updateClippingSessionCookieSchema,
   updateClippingIdentitySchema,
   updateClippingBountiesSchema,
 } from "@kick-manager/shared";
@@ -9,7 +8,6 @@ import { prisma } from "../lib/db.js";
 import { syncService } from "../services/sync/SyncService.js";
 import { submissionService } from "../services/submissions/SubmissionService.js";
 import { hasRealClippingCredentials, env } from "../lib/env.js";
-import { updateEnvVar } from "../lib/envWriter.js";
 import { getClippingAccountHealth } from "../lib/integrationHealth.js";
 import { activityLogService } from "../services/activity/ActivityLogService.js";
 import {
@@ -113,31 +111,6 @@ export async function clippingRoutes(app: FastifyInstance) {
         };
       }),
     };
-  });
-
-  // Used by the local cookie-sync browser extension (tools/clipping-cookie-sync-extension)
-  // so CLIPPING_SESSION_COOKIE never has to be copy-pasted by hand. Takes effect immediately
-  // (env.clipping.sessionCookie is mutated in place) and is persisted to .env so it survives
-  // a restart too. Intentionally unauthenticated — this app has no auth system anywhere and
-  // only ever listens on localhost; do not deploy this endpoint anywhere reachable remotely.
-  app.post("/api/clipping/session-cookie", async (request, reply) => {
-    const { cookie, identity } = updateClippingSessionCookieSchema.parse(request.body);
-    env.clipping.sessionCookie = cookie;
-    updateEnvVar("CLIPPING_SESSION_COOKIE", cookie);
-
-    const previousIdentity = getActiveClippingIdentity();
-    if (identity) {
-      updateActiveClippingIdentity(identity);
-      if (previousIdentity?.userId !== identity.userId) {
-        await activityLogService.log(
-          `CLIPPING browser session is now ${identity.email ?? identity.userId} (via extension).`
-        );
-      }
-    } else {
-      await activityLogService.log("CLIPPING session cookie updated automatically from browser extension.");
-    }
-
-    reply.status(204).send();
   });
 
   app.post("/api/clipping/identity", async (request, reply) => {

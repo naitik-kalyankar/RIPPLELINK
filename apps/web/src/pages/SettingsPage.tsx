@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, ExternalLink, RotateCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { getPlatform } from "@/platform";
 import {
   useClippingAccounts,
   useDeactivateClippingAccount,
   useLoginClippingAccount,
+  useOpenClippingAccount,
   useSyncLinkedClippingAccounts,
 } from "@/api/clippingAccounts";
 import { useClippingScope } from "@/lib/clippingScope";
+import { DEFAULT_CLIPPING_CAMPAIGN_ID, useDefaultClippingCampaignId } from "@/lib/clippingCampaignDefault";
 import { AddClippingAccountModal } from "@/components/instagram/AddClippingAccountModal";
 import { useToast } from "@/components/ui/toast";
 import { cn, formatCurrency, formatRelativeTime } from "@/lib/utils";
@@ -22,9 +26,12 @@ export function SettingsPage() {
   const { data: clippingAccounts } = useClippingAccounts();
   const { selectedId, setSelectedId } = useClippingScope();
   const login = useLoginClippingAccount();
+  const openAccount = useOpenClippingAccount();
   const syncLinked = useSyncLinkedClippingAccounts();
   const deactivate = useDeactivateClippingAccount();
   const { toast } = useToast();
+  const defaultCampaignId = useDefaultClippingCampaignId();
+  const [campaignIdDraft, setCampaignIdDraft] = useState(defaultCampaignId.value);
 
   useEffect(() => {
     getPlatform().then(async (platform) => {
@@ -53,6 +60,51 @@ export function SettingsPage() {
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">API endpoint</span>
             <span className="font-mono text-xs">{import.meta.env.VITE_API_URL ?? "http://localhost:4000"}</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>CLIPPING Defaults</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          <div className="grid gap-1.5">
+            <Label htmlFor="default-campaign-id">Default campaign ID</Label>
+            <p className="text-xs text-muted-foreground">
+              Pre-fills "Campaign ID" whenever you add a new CLIPPING account, so it doesn't
+              need to be retyped every time.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                id="default-campaign-id"
+                className="max-w-sm font-mono text-xs"
+                value={campaignIdDraft}
+                onChange={(e) => setCampaignIdDraft(e.target.value)}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!campaignIdDraft.trim() || campaignIdDraft.trim() === defaultCampaignId.value}
+                onClick={() => {
+                  defaultCampaignId.setValue(campaignIdDraft.trim());
+                  toast({ title: "Default campaign ID saved", variant: "success" });
+                }}
+              >
+                Save
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={defaultCampaignId.isDefault}
+                onClick={() => {
+                  defaultCampaignId.reset();
+                  setCampaignIdDraft(DEFAULT_CLIPPING_CAMPAIGN_ID);
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Reset to default
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -122,6 +174,26 @@ export function SettingsPage() {
                       )}
                     </div>
 
+                    {(account.lastLoginError ?? account.lastOpenError) && (
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                        <span>{account.lastLoginError ?? account.lastOpenError}</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                          disabled={account.loginInProgress || login.isPending}
+                          onClick={() =>
+                            login.mutate(account.id, {
+                              onSuccess: (result) => toast({ title: "Opening browser…", description: result.message }),
+                              onError: (error) => toast({ title: "Could not start login", description: error.message, variant: "destructive" }),
+                            })
+                          }
+                        >
+                          Log in as "{account.label}"
+                        </Button>
+                      </div>
+                    )}
+
                     <div className="mt-3 flex flex-wrap gap-2 border-t border-border/60 pt-3">
                       <Button
                         variant={isActive ? "secondary" : "outline"}
@@ -143,6 +215,19 @@ export function SettingsPage() {
                         }
                       >
                         {account.hasStorageState ? "Re-log in" : "Log in"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!account.hasStorageState || account.openInProgress || openAccount.isPending}
+                        title={!account.hasStorageState ? "Log in first, then you can open it." : "Opens a browser window showing this account, already signed in."}
+                        onClick={() =>
+                          openAccount.mutate(account.id, {
+                            onError: (error) => toast({ title: "Couldn't open", description: error.message, variant: "destructive" }),
+                          })
+                        }
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" /> {account.openInProgress ? "Open in browser…" : "Open in browser"}
                       </Button>
                       <Button
                         variant="outline"

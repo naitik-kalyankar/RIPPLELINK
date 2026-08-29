@@ -28,6 +28,8 @@ export interface ClippingAccountStatus {
   lastError: { message: string; at: string } | null;
   loginInProgress: boolean;
   lastLoginError: string | null;
+  openInProgress: boolean;
+  lastOpenError: string | null;
   // CLIPPING's own computed payout for this login, refreshed every sync — null until the
   // first sync after connecting. See routes/clippingAccounts.ts's serializeAccount.
   lastPayout: number | null;
@@ -41,9 +43,11 @@ export function useClippingAccounts() {
   return useQuery({
     queryKey: ["clipping-accounts"],
     queryFn: () => apiClient.get<{ items: ClippingAccountStatus[] }>("/api/clipping-accounts"),
-    // Poll while any account has a headed login in flight (up to 10 min) so the "Log in"
-    // button's status reflects it finishing without the user having to manually refresh.
-    refetchInterval: (query) => (query.state.data?.items.some((a) => a.loginInProgress) ? 3_000 : false),
+    // Always poll so the status dot reflects live health (a session can die server-side any
+    // time, not just right after a login/sync click) — faster while a headed login or open
+    // window is in flight so that finishing/closing shows up quickly too.
+    refetchInterval: (query) =>
+      query.state.data?.items.some((a) => a.loginInProgress || a.openInProgress) ? 3_000 : 15_000,
   });
 }
 
@@ -78,6 +82,32 @@ export function useLoginClippingAccount() {
   return useMutation({
     mutationFn: (id: string) => apiClient.post<{ message: string }>(`/api/clipping-accounts/${id}/login`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["clipping-accounts"] }),
+  });
+}
+
+export function useOpenClippingAccount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.post<{ message: string }>(`/api/clipping-accounts/${id}/open`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["clipping-accounts"] }),
+  });
+}
+
+export interface ClippingLinkedAccountView {
+  id: string;
+  username: string;
+  instagramUserId: string | null;
+  platform: string;
+  localAccountId: string | null;
+}
+
+export function useClippingLinkedAccounts(clippingAccountId: string | null) {
+  return useQuery({
+    queryKey: ["clipping-accounts", clippingAccountId, "linked-accounts"],
+    queryFn: () =>
+      apiClient.get<{ items: ClippingLinkedAccountView[] }>(`/api/clipping-accounts/${clippingAccountId}/linked-accounts`),
+    enabled: !!clippingAccountId,
+    staleTime: 60_000,
   });
 }
 

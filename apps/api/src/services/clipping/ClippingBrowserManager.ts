@@ -278,15 +278,29 @@ class ClippingBrowserManager {
 
   private async getBrowser(): Promise<Browser> {
     if (!this.browserPromise) {
-      this.browserPromise = chromium.launch({ headless: true }).catch((error) => {
-        this.browserPromise = null;
-        throw new ClippingApiError(
-          `Failed to launch Playwright's Chromium — has \`npx playwright install chromium\` been run on this machine? (${
-            error instanceof Error ? error.message : String(error)
-          })`,
-          "auth"
-        );
-      });
+      this.browserPromise = chromium
+        .launch({ headless: true })
+        .then((browser) => {
+          // Self-heal instead of silently going dead: if this browser process ever
+          // disappears (crashes, or something outside this app kills it — e.g. a stray
+          // `pkill chromium`), clear the cached promise and cached contexts so the next
+          // getBrowser()/getContext() call relaunches fresh rather than reusing a dead
+          // reference forever until the whole API process restarts.
+          browser.on("disconnected", () => {
+            this.browserPromise = null;
+            this.contexts.clear();
+          });
+          return browser;
+        })
+        .catch((error) => {
+          this.browserPromise = null;
+          throw new ClippingApiError(
+            `Failed to launch Playwright's Chromium — has \`npx playwright install chromium\` been run on this machine? (${
+              error instanceof Error ? error.message : String(error)
+            })`,
+            "auth"
+          );
+        });
     }
     return this.browserPromise;
   }
@@ -304,9 +318,62 @@ class ClippingBrowserManager {
     return context;
   }
 
+  // Confirmed by hand: navigating the SHARED persistent context to a real CLIPPING page
+  // (campaign page, /dashboard, /dashboard/accounts) can trigger something on CLIPPING's end
+  // that silently signs the session out client-side, in-memory, for the rest of this
+  // process's life — even though the storageState saved to disk from BEFORE that navigation
+  // stays completely valid. Every method that navigates the shared context for a scrape (not
+  // getSessionCookie itself, which never navigates) calls this right after, so a poisoned
+  // in-memory context gets dropped instead of silently breaking every later call (including
+  // unrelated ones like plain clip-fetching) for the rest of the process's life. The next
+  // getContext() call for this account then reloads fresh from the still-good disk file.
+  private async evictIfSessionDied(account: Pick<ClippingAccount, "id" | "storageStatePath">): Promise<void> {
+    const context = this.contexts.get(account.id);
+    if (!context) return;
+    const cookies = await context.cookies(`https://${CLIPPING_DOMAIN}`).catch(() => []);
+    if (cookies.some((c) => AUTH_COOKIE_PATTERN.test(c.name))) return; // still logged in — nothing to do
+    await context.close().catch(() => {});
+    this.contexts.delete(account.id);
+  }
+
+  /** Cheap, no-navigation liveness check: does this account's Playwright context currently
+   * hold a Supabase auth cookie? Doesn't confirm CLIPPING's server still accepts it (that
+   * would need a real request) — just "is a session cookie actually present right now", which
+   * is what the account-switcher's status dot polls every 15s to answer "signed in in the
+   * background or not". Loads the context (from disk storageState if not already cached) but
+   * never navigates a page, so it's safe to call frequently for every account. */
+  async hasLiveCookie(account: Pick<ClippingAccount, "id" | "storageStatePath">): Promise<boolean> {
+    try {
+      const context = await this.getContext(account);
+      const cookies = await context.cookies(`https://${CLIPPING_DOMAIN}`);
+      return cookies.some((c) => AUTH_COOKIE_PATTERN.test(c.name));
+    } catch {
+      return false;
+    }
+  }
+
+  // Supabase's access token backing this cookie is short-lived (~50min, per CLIPPING's own
+  // behavior) — refreshed reactively today (HttpClippingProvider retries once on a 401/403 via
+  // refreshSession), but that still means the FIRST request after the token goes stale always
+  // fails once. Proactively refreshing a cookie that's gone unrefreshed for a while avoids that
+  // — checked opportunistically on every getSessionCookie() call (i.e. every real CLIPPING
+  // request), so nothing extra needs to poll in the background. Kept well under the ~50min
+  // expiry for safety margin against clock drift/network latency.
+  private lastRefreshedAt = new Map<string, number>();
+  private static readonly PROACTIVE_REFRESH_INTERVAL_MS = 40 * 60 * 1000;
+
   /** Reads the account's current Supabase auth cookie(s) and serializes them the same way
-   * HttpClippingProvider has always sent them: a single `Cookie:` header value. */
+   * HttpClippingProvider has always sent them: a single `Cookie:` header value. Proactively
+   * refreshes first if this account's cookie hasn't been refreshed in a while (see
+   * lastRefreshedAt) — best-effort: a failed proactive refresh doesn't block returning
+   * whatever cookie is currently on hand, since the caller's own request may still succeed
+   * (or fail with a clearer error) on its own. */
   async getSessionCookie(account: Pick<ClippingAccount, "id" | "storageStatePath">): Promise<string> {
+    const lastRefreshed = this.lastRefreshedAt.get(account.id) ?? 0;
+    if (Date.now() - lastRefreshed > ClippingBrowserManager.PROACTIVE_REFRESH_INTERVAL_MS) {
+      await this.refreshSession(account).catch(() => {});
+    }
+
     const context = await this.getContext(account);
     const cookies = await context.cookies(`https://${CLIPPING_DOMAIN}`);
     const authCookies = cookies
@@ -348,6 +415,7 @@ class ClippingBrowserManager {
     }
 
     const cookieEmail = decodeEmailFromCookies(await context.cookies(`https://${CLIPPING_DOMAIN}`));
+    await this.evictIfSessionDied(account);
     return { email: scraped?.email ?? cookieEmail, displayName: scraped?.displayName ?? null };
   }
 
@@ -369,6 +437,7 @@ class ClippingBrowserManager {
       );
     } finally {
       await page.close();
+      await this.evictIfSessionDied(account);
     }
   }
 
@@ -396,6 +465,7 @@ class ClippingBrowserManager {
       );
     } finally {
       await page.close();
+      await this.evictIfSessionDied(account);
     }
   }
 
@@ -430,6 +500,7 @@ class ClippingBrowserManager {
       await page.close();
     }
     await this.persist(account);
+    this.lastRefreshedAt.set(account.id, Date.now());
   }
 
   /** Writes the context's current cookies/localStorage to disk so the session survives a
@@ -463,7 +534,10 @@ class ClippingBrowserManager {
    * Returns the logged-in account's email + display name (scraped from the session/page, not
    * typed by hand) so the caller can save them — either field is null if it couldn't be
    * found. */
-  async loginHeaded(account: Pick<ClippingAccount, "id" | "storageStatePath">): Promise<ClippingIdentity> {
+  async loginHeaded(
+    account: Pick<ClippingAccount, "id" | "storageStatePath" | "label">,
+    expectedEmail?: string | null
+  ): Promise<ClippingIdentity> {
     if (this.loginInProgress.has(account.id)) {
       throw new ClippingApiError("A login is already in progress for this account.", "auth");
     }
@@ -475,6 +549,29 @@ class ClippingBrowserManager {
       const context = await browser.newContext();
       const page = await context.newPage();
       await page.goto(`https://${CLIPPING_DOMAIN}/auth/login`, { waitUntil: "load" });
+      // Tells the human which of possibly several CLIPPING accounts this window is for —
+      // there's nothing in CLIPPING's own login page that says so, and re-logging into the
+      // wrong one (easy to do with several accounts open) silently overwrites this slot's
+      // session with a different account's, corrupting which login this app thinks it has.
+      await page
+        .evaluate((label: string) => {
+          const banner = document.createElement("div");
+          banner.textContent = `Please log in as "${label}"`;
+          Object.assign(banner.style, {
+            position: "fixed",
+            top: "0",
+            left: "0",
+            right: "0",
+            zIndex: "2147483647",
+            background: "#4f46e5",
+            color: "#fff",
+            font: "600 14px system-ui, sans-serif",
+            padding: "10px 16px",
+            textAlign: "center",
+          });
+          document.body.prepend(banner);
+        }, account.label)
+        .catch(() => {});
 
       const deadline = Date.now() + 10 * 60 * 1000; // 10 minutes to log in by hand
       let authed = false;
@@ -502,6 +599,14 @@ class ClippingBrowserManager {
       const cookieEmail = decodeEmailFromCookies(await context.cookies(`https://${CLIPPING_DOMAIN}`));
       const identity: ClippingIdentity = { email: scraped?.email ?? cookieEmail, displayName: scraped?.displayName ?? null };
 
+      if (expectedEmail && identity.email && identity.email.toLowerCase() !== expectedEmail.toLowerCase()) {
+        await browser.close().catch(() => {});
+        throw new ClippingApiError(
+          `You signed in as ${identity.email}, but this slot is for "${account.label}" (${expectedEmail}). Please log in as "${account.label}" instead.`,
+          "auth"
+        );
+      }
+
       fs.mkdirSync(SESSIONS_DIR, { recursive: true });
       await context.storageState({ path: storageStateAbsolutePath(account) });
       await browser.close();
@@ -514,6 +619,9 @@ class ClippingBrowserManager {
         await stale.close().catch(() => {});
         this.contexts.delete(account.id);
       }
+      // A session that was JUST logged in is as fresh as a cookie ever gets — no need for the
+      // next getSessionCookie() call to immediately do a proactive refresh too.
+      this.lastRefreshedAt.set(account.id, Date.now());
 
       return identity;
     } catch (error) {
@@ -521,6 +629,96 @@ class ClippingBrowserManager {
       throw error;
     } finally {
       this.loginInProgress.delete(account.id);
+    }
+  }
+
+  // Tracks in-flight "open in a visible window" requests the same way loginInProgress does —
+  // separate map since opening and logging in are different operations that can legitimately
+  // happen for different accounts (or even overlap for the same one) without conflicting.
+  private openInProgress = new Set<string>();
+  private lastOpenError = new Map<string, string>();
+
+  isOpeningHeaded(accountId: string): boolean {
+    return this.openInProgress.has(accountId);
+  }
+
+  getLastOpenError(accountId: string): string | null {
+    return this.lastOpenError.get(accountId) ?? null;
+  }
+
+  /** Pops open a real, visible Chromium window showing this account's ALREADY-authenticated
+   * session — reuses its saved storageState, so no login is needed. This is a separate
+   * browser process from the shared headless one everything else runs through (Playwright
+   * can't make an already-launched headless browser visible after the fact); it's read/write
+   * independent of that shared browser's cached context, so browsing here can't disrupt sync
+   * or submissions running in the background. Requires the account to have logged in at least
+   * once already (loginHeaded) — there's no session to reuse otherwise. Persists whatever
+   * state the window ends up in in case anything changed (e.g. a token refresh) once the
+   * window is closed by hand; there's no auto-close/timeout since browsing has no fixed length. */
+  async openHeaded(
+    account: Pick<ClippingAccount, "id" | "storageStatePath" | "label">,
+    expectedEmail?: string | null,
+    path_ = "/dashboard"
+  ): Promise<void> {
+    const statePath = storageStateAbsolutePath(account);
+    if (!fs.existsSync(statePath)) {
+      throw new ClippingApiError(
+        "This account hasn't been logged in yet — use Log in first, then Open will reuse that session.",
+        "auth"
+      );
+    }
+
+    this.openInProgress.add(account.id);
+    this.lastOpenError.delete(account.id);
+    let browser: Browser | undefined;
+    try {
+      browser = await chromium.launch({ headless: false });
+      const context = await browser.newContext({ storageState: statePath });
+      const page = await context.newPage();
+      await page.goto(`https://${CLIPPING_DOMAIN}${path_}`, { waitUntil: "load", timeout: 30_000 });
+
+      // Playwright can't read a context's storageState once it's already closed (confirmed —
+      // it throws "Target ... has been closed"), and there's no reliable hook that fires
+      // *before* a human closes a real browser window, so a final on-close snapshot isn't
+      // possible. Snapshotting periodically while the window is open is the practical
+      // alternative — whatever changed (e.g. a token refresh) is captured within 30s of
+      // happening rather than lost when the window closes. Before each snapshot, check whose
+      // account is actually signed in right now — a human can sign out and into a DIFFERENT
+      // CLIPPING account inside this window, and blindly persisting that would silently
+      // overwrite this slot's saved session with the wrong account's.
+      const snapshotInterval = setInterval(async () => {
+        if (page.isClosed()) return;
+        const identity = await scrapeIdentityFromPage(page).catch(() => null);
+        if (expectedEmail && identity?.email && identity.email.toLowerCase() !== expectedEmail.toLowerCase()) {
+          this.lastOpenError.set(
+            account.id,
+            `This window is now signed in as ${identity.email} instead of "${account.label}" (${expectedEmail}) — sign back into "${account.label}" in that window, or close it and reopen.`
+          );
+          return; // skip this snapshot — don't persist the wrong account's session
+        }
+        this.lastOpenError.delete(account.id);
+        await context.storageState({ path: statePath }).catch(() => {});
+      }, 30_000);
+
+      const finish = () => {
+        clearInterval(snapshotInterval);
+        this.openInProgress.delete(account.id);
+        // Closing the visible WINDOW doesn't necessarily quit the underlying browser process
+        // (confirmed on macOS: the app stays running with zero windows after the last one is
+        // closed), which left `disconnected` never firing, openInProgress stuck true forever,
+        // and a dangling background Chromium process piling up on repeated opens. Force a full
+        // close here as soon as the window/page goes away so the process actually exits.
+        browser?.close().catch(() => {});
+      };
+      page.on("close", finish);
+      browser.on("disconnected", finish);
+    } catch (error) {
+      this.openInProgress.delete(account.id);
+      await browser?.close().catch(() => {});
+      throw new ClippingApiError(
+        `Failed to open CLIPPING for this account: ${error instanceof Error ? error.message : String(error)}`,
+        "unavailable"
+      );
     }
   }
 

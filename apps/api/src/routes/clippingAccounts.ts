@@ -69,10 +69,51 @@ async function syncLinkedAccounts(account: ClippingAccount) {
       );
     }
   }
+  linkedAccountsCache.delete(account.id);
   return { items: results, matchedCount: results.filter((r) => r.matched).length, updatedCount };
 }
 
-function serializeAccount(account: {
+export interface ClippingLinkedAccountView {
+  // CLIPPING's own internal id/username/platform for this linked social account — see
+  // ClippingBrowserManager.getLinkedAccounts. instagramUserId is CLIPPING's own identifier,
+  // NOT this app's InstagramAccount.instagramId (confirmed not equivalent — see comment on
+  // syncLinkedAccounts above), so it's informational only, never used for matching.
+  id: string;
+  username: string;
+  instagramUserId: string | null;
+  platform: string;
+  // Set when a local InstagramAccount row already exists for this username — lets the
+  // Socials page show "already added" vs offer a one-click add for the rest.
+  localAccountId: string | null;
+}
+
+// getLinkedAccounts() navigates a real CLIPPING page, so it's not something to re-run on every
+// Socials page load — cached briefly per ClippingAccount, same reasoning as the campaign-info
+// cache in routes/clipping.ts, just a shorter TTL since this is viewed more interactively.
+const linkedAccountsCache = new Map<string, { items: ClippingLinkedAccountView[]; fetchedAt: number }>();
+const LINKED_ACCOUNTS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getLinkedAccountsView(account: ClippingAccount, forceRefresh = false): Promise<ClippingLinkedAccountView[]> {
+  const cached = linkedAccountsCache.get(account.id);
+  if (!forceRefresh && cached && Date.now() - cached.fetchedAt < LINKED_ACCOUNTS_CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  const linked = await clippingBrowserManager.getLinkedAccounts(account);
+  const localAccounts = await prisma.instagramAccount.findMany({
+    where: { username: { in: linked.map((l) => l.username), mode: "insensitive" } },
+  });
+  const localByUsername = new Map(localAccounts.map((a) => [a.username.toLowerCase(), a]));
+
+  const items = linked.map((entry) => ({
+    ...entry,
+    localAccountId: localByUsername.get(entry.username.toLowerCase())?.id ?? null,
+  }));
+  linkedAccountsCache.set(account.id, { items, fetchedAt: Date.now() });
+  return items;
+}
+
+async function serializeAccount(account: {
   id: string;
   label: string;
   email: string | null;
@@ -81,15 +122,21 @@ function serializeAccount(account: {
   active: boolean;
   lastUsedAt: Date | null;
   lastLoginAt: Date | null;
+  storageStatePath: string;
   lastPayout: number | null;
   lastPayoutBountyBreakdown: unknown;
   lastPayoutFetchedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
-  // storageStatePath is deliberately never included — it's a server filesystem detail, not
-  // frontend-relevant, and the file itself holds live session data.
+  // storageStatePath is read here (to check the live cookie) but deliberately never included
+  // in the response — it's a server filesystem detail, not frontend-relevant, and the file
+  // itself holds live session data.
   const health = getClippingAccountHealth(account.id);
+  // The status dot's green/red is a LIVE check — does this account's Playwright context
+  // actually hold a session cookie right now — rather than "did the last real API request
+  // succeed", which could be stale for hours between syncs. See hasLiveCookie.
+  const hasLiveCookie = await clippingBrowserManager.hasLiveCookie(account);
   return {
     id: account.id,
     label: account.label,
@@ -100,10 +147,12 @@ function serializeAccount(account: {
     lastUsedAt: account.lastUsedAt?.toISOString() ?? null,
     lastLoginAt: account.lastLoginAt?.toISOString() ?? null,
     hasStorageState: account.lastLoginAt !== null,
-    healthy: health.lastError === null,
+    healthy: hasLiveCookie,
     lastError: health.lastError,
     loginInProgress: clippingBrowserManager.isLoggingIn(account.id),
     lastLoginError: clippingBrowserManager.getLastLoginError(account.id),
+    openInProgress: clippingBrowserManager.isOpeningHeaded(account.id),
+    lastOpenError: clippingBrowserManager.getLastOpenError(account.id),
     // CLIPPING's own computed payout for this login, refreshed every sync — see
     // SyncService.syncPayoutForAccount. Null until the first sync after this account connects.
     lastPayout: account.lastPayout,
@@ -117,7 +166,7 @@ function serializeAccount(account: {
 export async function clippingAccountsRoutes(app: FastifyInstance) {
   app.get("/api/clipping-accounts", async () => {
     const accounts = await prisma.clippingAccount.findMany({ where: { active: true }, orderBy: { createdAt: "asc" } });
-    return { items: accounts.map(serializeAccount) };
+    return { items: await Promise.all(accounts.map(serializeAccount)) };
   });
 
   app.post("/api/clipping-accounts", async (request, reply) => {
@@ -151,14 +200,14 @@ export async function clippingAccountsRoutes(app: FastifyInstance) {
 
     await activityLogService.log(`Added CLIPPING account "${account.label}".`);
     reply.status(201);
-    return serializeAccount(account);
+    return await serializeAccount(account);
   });
 
   app.patch("/api/clipping-accounts/:id", async (request) => {
     const { id } = request.params as { id: string };
     const body = updateClippingAccountSchema.parse(request.body);
     const account = await prisma.clippingAccount.update({ where: { id }, data: body });
-    return serializeAccount(account);
+    return await serializeAccount(account);
   });
 
   app.delete("/api/clipping-accounts/:id", async (request, reply) => {
@@ -173,7 +222,7 @@ export async function clippingAccountsRoutes(app: FastifyInstance) {
   app.get("/api/clipping-accounts/:id/status", async (request) => {
     const { id } = request.params as { id: string };
     const account = await prisma.clippingAccount.findUniqueOrThrow({ where: { id } });
-    return serializeAccount(account);
+    return await serializeAccount(account);
   });
 
   // Triggers a real, visible Chromium window on THIS machine for the human to log into
@@ -196,7 +245,7 @@ export async function clippingAccountsRoutes(app: FastifyInstance) {
     }
 
     clippingBrowserManager
-      .loginHeaded(account)
+      .loginHeaded(account, account.email)
       .then(async ({ email, displayName }) => {
         // Scraped straight from the session/page — not typed by hand. Only overwrites fields
         // we actually got a value for; a failed scrape never clobbers what's already saved.
@@ -245,7 +294,53 @@ export async function clippingAccountsRoutes(app: FastifyInstance) {
       where: { id },
       data: { ...(email ? { email } : {}), ...(displayName ? { label: displayName } : {}) },
     });
-    reply.status(200).send(serializeAccount(updated));
+    reply.status(200).send(await serializeAccount(updated));
+  });
+
+  // Pops open a real, visible Chromium window showing this account's already-connected
+  // session — no login needed, reuses the saved storageState from a previous Log in. Same
+  // localhost-only safety reasoning as the login route above. Fire-and-forget: the window
+  // stays open until the human closes it by hand, so this returns immediately rather than
+  // waiting on that.
+  app.post("/api/clipping-accounts/:id/open", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const account = await prisma.clippingAccount.findUniqueOrThrow({ where: { id } });
+
+    if (clippingBrowserManager.isOpeningHeaded(id)) {
+      reply.status(409).send({
+        error: "open_in_progress",
+        message: "A window for this account is already open.",
+      });
+      return;
+    }
+
+    try {
+      await clippingBrowserManager.openHeaded(account, account.email);
+    } catch (error) {
+      const message = error instanceof ClippingApiError ? error.message : "Unknown error.";
+      reply.status(400).send({ error: "open_failed", message });
+      return;
+    }
+
+    reply.status(202).send({ message: "Opening a browser window on this machine…" });
+  });
+
+  // Every social account CLIPPING has linked to this login — including ones with no matching
+  // InstagramAccount row in this app yet — for the Socials page to display "here's everything
+  // CLIPPING has for this account" rather than only what's already been added here. Cached
+  // briefly (see getLinkedAccountsView); pass ?refresh=1 to bypass the cache.
+  app.get("/api/clipping-accounts/:id/linked-accounts", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { refresh } = request.query as { refresh?: string };
+    const account = await prisma.clippingAccount.findUniqueOrThrow({ where: { id } });
+
+    try {
+      const items = await getLinkedAccountsView(account, refresh === "1");
+      reply.status(200).send({ items });
+    } catch (error) {
+      const message = error instanceof ClippingApiError ? error.message : "Failed to read linked accounts from CLIPPING.";
+      reply.status(400).send({ error: "linked_accounts_failed", message });
+    }
   });
 
   // Reads CLIPPING's linked-accounts list and auto-fills clippingAccountId/clippingAccountRefId
