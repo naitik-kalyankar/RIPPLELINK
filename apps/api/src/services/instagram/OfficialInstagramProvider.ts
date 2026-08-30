@@ -36,12 +36,17 @@ interface MediaPage {
  */
 export class OfficialInstagramProvider implements InstagramService {
   async listAccountReels(account: InstagramAccountRef): Promise<FetchedReel[]> {
+    // Per-account key ("instagram:<id>", mirroring CLIPPING's "clipping:<id>") — a single
+    // shared "instagram" key meant one account's failure could silently clear (or set) every
+    // other account's health depending on request order, since each recordIntegrationSuccess/
+    // Error call would overwrite the same global entry regardless of which account it was for.
+    const healthKey = `instagram:${account.id}`;
     try {
       const reels = await this.fetchReels(account);
-      recordIntegrationSuccess("instagram");
+      recordIntegrationSuccess(healthKey);
       return reels;
     } catch (error) {
-      recordIntegrationError("instagram", error instanceof Error ? error.message : "Unknown Instagram error.");
+      recordIntegrationError(healthKey, error instanceof Error ? error.message : "Unknown Instagram error.");
       throw error;
     }
   }

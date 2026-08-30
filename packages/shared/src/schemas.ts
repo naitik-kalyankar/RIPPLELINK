@@ -28,6 +28,10 @@ export const createInstagramAccountSchema = z
 export type CreateInstagramAccountInput = z.infer<typeof createInstagramAccountSchema>;
 
 export const updateInstagramAccountSchema = z.object({
+  // Only settable indirectly today — when accessToken changes, the server overwrites this
+  // (and username) from the token's own verified identity rather than trusting a client-typed
+  // value, same as account creation. Exposed here so that overwrite can actually take effect.
+  instagramId: z.string().min(1).optional(),
   username: z.string().min(1).optional(),
   displayName: z.string().optional(),
   active: z.boolean().optional(),

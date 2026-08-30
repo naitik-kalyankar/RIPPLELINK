@@ -29,3 +29,7 @@ export function getIntegrationHealth() {
 export function getClippingAccountHealth(accountId: string): IntegrationHealth {
   return state[`clipping:${accountId}`] ?? { lastError: null, lastSuccessAt: null };
 }
+
+export function getInstagramAccountHealth(accountId: string): IntegrationHealth {
+  return state[`instagram:${accountId}`] ?? { lastError: null, lastSuccessAt: null };
+}

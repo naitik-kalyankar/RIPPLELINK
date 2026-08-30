@@ -27,6 +27,7 @@ export class SyncService {
   /** Fetches + upserts Reels for a single account, running creator detection on new rows. */
   async syncAccount(account: SyncableAccount): Promise<AccountSyncResult> {
     const accountRef = {
+      id: account.id,
       instagramId: account.instagramId,
       username: account.username,
       accessToken: account.accessToken,

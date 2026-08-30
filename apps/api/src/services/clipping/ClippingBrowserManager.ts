@@ -385,7 +385,7 @@ class ClippingBrowserManager {
 
     if (authCookies.length === 0) {
       throw new ClippingApiError(
-        "No CLIPPING session found for this account — run `npx tsx apps/api/scripts/clipping-login.ts <accountId>` to log in.",
+        "No CLIPPING session found for this account — sign in on the Settings page.",
         "auth"
       );
     }

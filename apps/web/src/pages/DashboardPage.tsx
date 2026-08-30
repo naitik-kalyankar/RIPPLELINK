@@ -63,7 +63,7 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 function usePayoutCycle(campaign: ClippingCampaignInfo | null | undefined) {
   const now = new Date();
 
-  if (campaign) {
+  if (campaign && campaign.days > 0) {
     const start = new Date(campaign.startDate);
     const end = new Date(start.getTime() + campaign.days * 86_400_000);
     const daysLeft = Math.max(0, Math.ceil((end.getTime() - now.getTime()) / 86_400_000));
@@ -107,15 +107,17 @@ export function DashboardPage() {
         </p>
       </div>
 
-      {isError ? (
+      {isError && (
         <div className="flex items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           Couldn't load dashboard stats. Check that the API is reachable and try refreshing.
         </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
-          {/* Estimated payout: dark neutral surface, purple used only as a subtle accent */}
-          <Card className="relative overflow-hidden border-primary/15 lg:col-span-4">
+      )}
+      {/* Payout Cycle and Recent Activity come from separate queries, so they still render even
+       * when the stats query above fails — only the stats-dependent cards below degrade. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
+        {/* Estimated payout: dark neutral surface, purple used only as a subtle accent */}
+        <Card className="relative overflow-hidden border-primary/15 lg:col-span-4">
             <div
               aria-hidden="true"
               className="pointer-events-none absolute -right-20 -top-20 h-72 w-72 rounded-full bg-primary/10 blur-[80px]"
@@ -162,7 +164,9 @@ export function DashboardPage() {
               </Tooltip>
             </CardHeader>
             <CardContent className="relative flex flex-col gap-3 p-6 pt-0">
-              {isLoading || !stats ? (
+              {isError ? (
+                <p className="text-3xl font-semibold text-muted-foreground">—</p>
+              ) : isLoading || !stats ? (
                 <Skeleton className="h-12 w-48" />
               ) : (
                 <>
@@ -249,7 +253,9 @@ export function DashboardPage() {
                 </span>
               </CardHeader>
               <CardContent className="p-5 pt-0">
-                {isLoading || !stats ? (
+                {isError ? (
+                  <span className="text-3xl font-semibold text-muted-foreground">—</span>
+                ) : isLoading || !stats ? (
                   <Skeleton className="h-8 w-16" />
                 ) : (
                   <span className="text-3xl font-semibold tabular-nums tracking-tight">
@@ -285,8 +291,7 @@ export function DashboardPage() {
               ))}
             </CardContent>
           </Card>
-        </div>
-      )}
+      </div>
 
       <PayoutBreakdownModal open={breakdownOpen} onOpenChange={setBreakdownOpen} accounts={accountsInScope} />
     </div>

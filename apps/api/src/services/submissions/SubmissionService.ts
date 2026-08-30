@@ -27,14 +27,46 @@ export class MissingBountyTagError extends Error {
   }
 }
 
+export class SubmissionInProgressError extends Error {
+  constructor() {
+    super("This Reel is already being submitted.");
+    this.name = "SubmissionInProgressError";
+  }
+}
+
 const CONCURRENCY_LIMIT = 3;
 
 export class SubmissionService {
+  // In-process guard against two concurrent submitReel calls for the SAME Reel — the
+  // `clippingSubmission` DB check below (and ClippingSubmission.reelId's @unique constraint)
+  // only stops a duplicate LOCAL row after the fact; without this, two racing calls (e.g. a
+  // duplicate id landing twice in one bulk-link batch, or a double-click racing a single Link
+  // with a bulk one) can both pass that check before either has written back, both call
+  // provider.submitClip — creating a real duplicate submission on CLIPPING's side — and the
+  // second worker's local write then fails on the unique constraint, misleadingly logging a
+  // submission that actually WENT THROUGH externally as "failed". Sufficient here because this
+  // API only ever runs as a single process on localhost (see ClippingBrowserManager's headed-
+  // login comments for the same assumption) — a multi-instance deployment would need a DB-level
+  // lock instead.
+  private inFlightReelIds = new Set<string>();
+
   /**
    * Duplicate protection (spec §21): re-check our DB *and* the latest CLIPPING state before
    * ever submitting, rather than trusting a locally cached "linked" flag.
    */
   async submitReel(reelId: string, input: LinkReelInput) {
+    if (this.inFlightReelIds.has(reelId)) {
+      throw new SubmissionInProgressError();
+    }
+    this.inFlightReelIds.add(reelId);
+    try {
+      return await this.submitReelInner(reelId, input);
+    } finally {
+      this.inFlightReelIds.delete(reelId);
+    }
+  }
+
+  private async submitReelInner(reelId: string, input: LinkReelInput) {
     const reel = await prisma.reel.findUnique({ where: { id: reelId }, include: reelInclude });
     if (!reel) throw new ReelNotFoundError();
     if (reel.clippingSubmission) throw new AlreadyLinkedError();
@@ -114,7 +146,9 @@ export class SubmissionService {
           const message =
             error instanceof AlreadyLinkedError
               ? "Already linked."
-              : error instanceof ClippingApiError
+              : error instanceof SubmissionInProgressError
+                ? "Already submitting — duplicate in this batch."
+                : error instanceof ClippingApiError
                 ? error.message
                 : error instanceof Error
                   ? error.message

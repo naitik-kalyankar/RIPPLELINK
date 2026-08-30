@@ -82,6 +82,13 @@ export async function reelsRoutes(app: FastifyInstance) {
       ...(query.status === "failed"
         ? { submissionAttempts: { some: { status: "failed" } }, clippingSubmission: { is: null } }
         : {}),
+      ...(query.status === "submitting"
+        ? { submissionAttempts: { some: { status: "uploading" } }, clippingSubmission: { is: null } }
+        : {}),
+      // computeLinkStatus (ReelMatchingService.ts) never actually produces "unknown" for a
+      // Reel's linkStatus — it's a LINK_STATUSES value with no real rows, so filtering by it
+      // should return none, not silently fall through to "no filter" (every Reel).
+      ...(query.status === "unknown" ? { id: "__no_reel_has_unknown_link_status__" } : {}),
       ...(query.search
         ? {
             OR: [

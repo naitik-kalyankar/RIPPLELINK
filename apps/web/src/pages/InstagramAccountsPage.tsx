@@ -47,13 +47,13 @@ function GroupStatus({ clippingAccount }: { clippingAccount: ClippingAccountStat
     return <StatusDot label="Not signed in" color="muted" tooltip="Sign in on the Settings page to connect it." />;
   }
   if (clippingAccount.healthy) {
-    return <StatusDot label="Connected" color="success" tooltip="Last CLIPPING request from this account succeeded." />;
+    return <StatusDot label="Connected" color="success" tooltip="Signed in — session cookie present." />;
   }
   return (
     <StatusDot
       label="Error"
       color="destructive"
-      tooltip={clippingAccount.lastError?.message ?? "The last CLIPPING request from this account failed."}
+      tooltip={clippingAccount.lastError?.message ?? "No session cookie found — sign in again."}
     />
   );
 }

@@ -26,9 +26,9 @@ export function IntegrationStatusBar() {
         color={ig.mode === "mock" ? "muted" : ig.healthy ? "success" : "destructive"}
         tooltip={
           ig.mode === "mock"
-            ? "Instagram: mock mode (no INSTAGRAM_API_KEY configured)"
+            ? "Instagram: no accounts with an access token yet"
             : ig.healthy
-              ? `Instagram: connected — last successful fetch ${formatRelativeTime(ig.lastSuccessAt)}`
+              ? `Instagram: connected — last fetch ${formatRelativeTime(ig.lastSuccessAt)}`
               : `Instagram: ${ig.lastError?.message ?? "unknown error"}`
         }
       />
@@ -40,10 +40,10 @@ export function IntegrationStatusBar() {
             color={!account.hasStorageState ? "muted" : account.healthy ? "success" : "destructive"}
             tooltip={
               !account.hasStorageState
-                ? `CLIPPING (${account.label}): not logged in yet — run the clipping:login script.`
+                ? `CLIPPING (${account.label}): not signed in — sign in on the Settings page.`
                 : account.healthy
-                  ? `CLIPPING (${account.label}): connected — last used ${formatRelativeTime(account.lastUsedAt)}`
-                  : `CLIPPING (${account.label}): ${account.lastError?.message ?? "unknown error"}`
+                  ? `CLIPPING (${account.label}): signed in — last used ${formatRelativeTime(account.lastUsedAt)}`
+                  : `CLIPPING (${account.label}): ${account.lastError?.message ?? "no session cookie found — sign in again."}`
             }
           />
         ))
@@ -53,9 +53,9 @@ export function IntegrationStatusBar() {
           color={clip.mode === "mock" ? "muted" : clip.healthy ? "success" : "destructive"}
           tooltip={
             clip.mode === "mock"
-              ? "CLIPPING: mock mode (no CLIPPING_SESSION_COOKIE configured)"
+              ? "CLIPPING: no account connected yet"
               : clip.healthy
-                ? `CLIPPING: connected — last successful request ${formatRelativeTime(clip.lastSuccessAt)}`
+                ? `CLIPPING: connected — last request ${formatRelativeTime(clip.lastSuccessAt)}`
                 : `CLIPPING: ${clip.lastError?.message ?? "unknown error"}`
           }
         />

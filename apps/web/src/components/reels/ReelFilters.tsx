@@ -99,7 +99,7 @@ export function ReelFilters({ filters, onChange }: ReelFiltersProps) {
           </SelectContent>
         </Select>
 
-        <Select value={filters.sort ?? "newest"} onValueChange={(value) => onChange({ ...filters, sort: value })}>
+        <Select value={filters.sort ?? "newest"} onValueChange={(value) => set({ sort: value })}>
           <SelectTrigger className="w-full sm:w-40"><SelectValue /></SelectTrigger>
           <SelectContent>
             {SORT_OPTIONS.map((o) => (

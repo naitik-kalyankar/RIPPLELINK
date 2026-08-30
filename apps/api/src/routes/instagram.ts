@@ -90,10 +90,37 @@ export async function instagramRoutes(app: FastifyInstance) {
     return serializeAccount(account);
   });
 
-  app.patch("/api/instagram/accounts/:id", async (request) => {
+  app.patch("/api/instagram/accounts/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = updateInstagramAccountSchema.parse(request.body);
-    const account = await prisma.instagramAccount.update({ where: { id }, data: body });
+    const existing = await prisma.instagramAccount.findUniqueOrThrow({ where: { id } });
+
+    const data: typeof body = { ...body };
+    // A new access token identifies its own account, same as at creation — without this, a
+    // token pasted for the WRONG account (an easy mistake with several accounts open) would
+    // silently keep the old instagramId/username, so every future sync would fetch a different
+    // account's Reels under this one's identity.
+    if (body.accessToken) {
+      try {
+        const identity = await fetchInstagramIdentity(body.accessToken);
+        data.instagramId = body.instagramId ?? identity.id;
+        data.username = body.username ?? identity.username;
+        if (identity.username.toLowerCase() !== existing.username.toLowerCase()) {
+          await activityLogService.log(
+            `New access token for "${existing.username}" actually belongs to @${identity.username} — updated to match. Double-check this was the intended account.`,
+            "warning"
+          );
+        }
+      } catch (error) {
+        reply.status(400).send({
+          error: "identity_detection_failed",
+          message: error instanceof Error ? error.message : "Could not verify this access token with Instagram.",
+        });
+        return;
+      }
+    }
+
+    const account = await prisma.instagramAccount.update({ where: { id }, data });
     return serializeAccount(account);
   });
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { UploadCloud } from "lucide-react";
+import type { Reel } from "@kick-manager/shared";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,6 +9,7 @@ import { useBulkLinkReels, useLinkReel, useReels } from "@/api/reels";
 import { useCampaignId } from "@/api/clipping";
 import { useClippingScope } from "@/lib/clippingScope";
 import { LinkStatusBadge } from "@/components/reels/LinkStatus";
+import { BulkBountyAssignModal } from "@/components/reels/BulkBountyAssignModal";
 import { formatDate } from "@/lib/utils";
 
 export function UploadQueuePage() {
@@ -20,6 +22,9 @@ export function UploadQueuePage() {
     instagramAccountId: scopedInstagramAccountIds?.join(","),
   });
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Same "no blank bounty" guard as ReelsPage's bulk link — see BulkBountyAssignModal.
+  const [bountyQueue, setBountyQueue] = useState<Reel[] | null>(null);
+  const [pendingBulkReelIds, setPendingBulkReelIds] = useState<string[]>([]);
   const linkReel = useLinkReel();
   const bulkLink = useBulkLinkReels();
   const campaignId = useCampaignId();
@@ -43,17 +48,34 @@ export function UploadQueuePage() {
     );
   };
 
-  const uploadSelected = () => {
+  const submitBulk = (reelIds: string[], bountyTags?: Record<string, string>) => {
     bulkLink.mutate(
-      { reelIds: Array.from(selected), campaignId },
+      { reelIds, campaignId, bountyTags },
       {
         onSuccess: (result) => {
           const successCount = result.results.filter((r) => r.success).length;
-          toast({ title: `${successCount} of ${selected.size} uploaded` });
+          toast({
+            title: `${successCount} of ${reelIds.length} uploaded`,
+            description: successCount < reelIds.length ? "Some uploads failed — check details and retry." : undefined,
+            variant: successCount === reelIds.length ? "success" : "default",
+          });
           setSelected(new Set());
         },
       }
     );
+  };
+
+  const uploadSelected = () => {
+    const reelIds = Array.from(selected);
+    const selectedReels = queueItems.filter((r) => selected.has(r.id));
+    const needsBounty = selectedReels.filter((r) => !r.creator?.detectedIdentifier);
+
+    if (needsBounty.length > 0) {
+      setPendingBulkReelIds(reelIds);
+      setBountyQueue(needsBounty);
+      return;
+    }
+    submitBulk(reelIds);
   };
 
   return (
@@ -110,11 +132,11 @@ export function UploadQueuePage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={linkReel.isPending || !reel.creator?.detectedIdentifier}
+                    disabled={linkReel.isPending || reel.linkStatus === "submitting" || !reel.creator?.detectedIdentifier}
                     title={!reel.creator?.detectedIdentifier ? "No detected creator — assign one from the Reels page first (Link modal has a Detect button)." : undefined}
                     onClick={() => uploadOne(reel.id, reel.creator?.detectedIdentifier)}
                   >
-                    {reel.linkStatus === "failed" ? "Retry" : "Upload"}
+                    {reel.linkStatus === "submitting" ? "Submitting…" : reel.linkStatus === "failed" ? "Retry" : "Upload"}
                   </Button>
                 </td>
               </tr>
@@ -129,6 +151,21 @@ export function UploadQueuePage() {
           </tbody>
         </table>
       </div>
+
+      {bountyQueue && (
+        <BulkBountyAssignModal
+          reels={bountyQueue}
+          onCancel={() => {
+            setBountyQueue(null);
+            setPendingBulkReelIds([]);
+          }}
+          onComplete={(bountyTags) => {
+            setBountyQueue(null);
+            submitBulk(pendingBulkReelIds, bountyTags);
+            setPendingBulkReelIds([]);
+          }}
+        />
+      )}
     </div>
   );
 }

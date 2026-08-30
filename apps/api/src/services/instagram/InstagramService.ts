@@ -7,6 +7,7 @@ export interface FetchedReel {
 }
 
 export interface InstagramAccountRef {
+  id: string;
   instagramId: string;
   username: string;
   // Per-account Graph API access token — each Instagram Business account's token only works
