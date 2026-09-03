@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { RippleLinkLogo } from "@/components/branding/Logo";
 import { NavList } from "./NavList";
 import { AccountPanel } from "./AccountPanel";
+import { UpdateButton } from "./UpdateButton";
 
 interface MobileNavProps {
   open: boolean;
@@ -34,6 +35,7 @@ export function MobileNav({ open, onOpenChange }: MobileNavProps) {
           <div className="flex flex-1 flex-col overflow-y-auto scrollbar-thin">
             <NavList onNavigate={() => onOpenChange(false)} alwaysExpanded />
           </div>
+          <UpdateButton alwaysExpanded />
           <AccountPanel alwaysExpanded />
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

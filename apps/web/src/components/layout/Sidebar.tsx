@@ -1,6 +1,7 @@
 import { RippleLinkLogo } from "@/components/branding/Logo";
 import { NavList } from "./NavList";
 import { LinkQueuePanel } from "./LinkQueuePanel";
+import { UpdateButton } from "./UpdateButton";
 
 export function Sidebar() {
   return (
@@ -14,6 +15,7 @@ export function Sidebar() {
       <div className="flex flex-1 flex-col overflow-y-auto scrollbar-thin">
         <NavList />
       </div>
+      <UpdateButton />
       <LinkQueuePanel />
     </aside>
   );

@@ -6,7 +6,6 @@ import { Topbar } from "./Topbar";
 import { MobileNav } from "./MobileNav";
 import { LinkingProgressBar } from "./LinkingProgressBar";
 import { ProgressiveBlur } from "./ProgressiveBlur";
-import { UpdateBanner } from "./UpdateBanner";
 import { cn } from "@/lib/utils";
 
 export function AppShell() {
@@ -73,7 +72,6 @@ export function AppShell() {
         </main>
       </div>
       <LinkingProgressBar />
-      <UpdateBanner />
     </div>
   );
 }
