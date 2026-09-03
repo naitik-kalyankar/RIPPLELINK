@@ -15,38 +15,13 @@ import {
   updateActiveClippingIdentity,
   clearActiveClippingIdentity,
 } from "../lib/clippingIdentity.js";
-import { clippingBrowserManager, type ClippingCampaignInfo } from "../services/clipping/ClippingBrowserManager.js";
-
-// Campaign cycle data (real startDate/days/minViews, read off CLIPPING's own campaign page —
-// see ClippingBrowserManager.getCampaignInfo) barely changes, so it's cached in-memory rather
-// than re-scraping a real page on every dashboard load. Same simple module-level pattern as
-// clippingIdentity.ts.
-let campaignInfoCache: { info: ClippingCampaignInfo; fetchedAt: number } | null = null;
-const CAMPAIGN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-
-async function getCachedCampaignInfo(): Promise<ClippingCampaignInfo | null> {
-  if (campaignInfoCache && Date.now() - campaignInfoCache.fetchedAt < CAMPAIGN_CACHE_TTL_MS) {
-    return campaignInfoCache.info;
-  }
-
-  const accounts = await prisma.clippingAccount.findMany({ where: { active: true } });
-  for (const account of accounts) {
-    try {
-      const info = await clippingBrowserManager.getCampaignInfo(account);
-      if (info) {
-        campaignInfoCache = { info, fetchedAt: Date.now() };
-        return info;
-      }
-    } catch {
-      // this account's session may not be logged in yet — try the next one
-    }
-  }
-  return null;
-}
+import { clippingBrowserManager } from "../services/clipping/ClippingBrowserManager.js";
+import { getCachedCampaignInfo } from "../lib/campaignInfoCache.js";
+import { upsertBounties } from "../lib/bountySync.js";
 
 export async function clippingRoutes(app: FastifyInstance) {
-  app.get("/api/clipping/campaign", async () => {
-    const info = await getCachedCampaignInfo();
+  app.get("/api/clipping/campaign", async (request) => {
+    const info = await getCachedCampaignInfo(request.user.id);
     return { campaign: info };
   });
 
@@ -61,7 +36,10 @@ export async function clippingRoutes(app: FastifyInstance) {
     const ids = instagramAccountIds ? instagramAccountIds.split(",").filter(Boolean) : undefined;
     // Same tradeoff as the dashboard payout calc: a submission with no linked Reel yet can't
     // be attributed to any account, so it's excluded once scoped rather than shown anyway.
-    const where = ids ? { reel: { instagramAccountId: { in: ids } } } : {};
+    const where = {
+      userId: request.user.id,
+      ...(ids ? { reel: { instagramAccountId: { in: ids } } } : {}),
+    };
 
     const [total, items] = await Promise.all([
       prisma.clippingSubmission.count({ where }),
@@ -77,14 +55,15 @@ export async function clippingRoutes(app: FastifyInstance) {
     return { items, page: pageNum, limit: limitNum, total, totalPages, hasNext: pageNum < totalPages };
   });
 
-  app.get("/api/clipping/status", async () => {
+  app.get("/api/clipping/status", async (request) => {
+    const userId = request.user.id;
     const [uploadedClips, lastLog, accounts] = await Promise.all([
-      prisma.clippingSubmission.count(),
+      prisma.clippingSubmission.count({ where: { userId } }),
       prisma.activityLog.findFirst({
-        where: { message: { contains: "CLIPPING sync" } },
+        where: { userId, message: { contains: "CLIPPING sync" } },
         orderBy: { createdAt: "desc" },
       }),
-      prisma.clippingAccount.findMany({ where: { active: true }, orderBy: { label: "asc" } }),
+      prisma.clippingAccount.findMany({ where: { active: true, userId }, orderBy: { label: "asc" } }),
     ]);
     const live = hasRealClippingCredentials();
     return {
@@ -119,11 +98,11 @@ export async function clippingRoutes(app: FastifyInstance) {
     reply.status(204).send();
   });
 
-  app.post("/api/clipping/identity/clear", async (_request, reply) => {
+  app.post("/api/clipping/identity/clear", async (request, reply) => {
     const wasSet = getActiveClippingIdentity() !== null;
     clearActiveClippingIdentity();
     if (wasSet) {
-      await activityLogService.log("CLIPPING browser session ended (logged out or session cookie cleared).");
+      await activityLogService.log(request.user.id, "CLIPPING browser session ended (logged out or session cookie cleared).");
     }
     reply.status(204).send();
   });
@@ -132,36 +111,31 @@ export async function clippingRoutes(app: FastifyInstance) {
     return { identity: getActiveClippingIdentity() };
   });
 
-  app.post("/api/clipping/sync", async () => {
-    return syncService.syncClipping();
+  app.post("/api/clipping/sync", async (request) => {
+    return syncService.syncClipping(request.user.id);
   });
 
   app.post("/api/clipping/submit", async (request) => {
     const { reelId, ...rest } = request.body as { reelId: string } & Record<string, unknown>;
     const input = linkReelSchema.parse(rest);
-    return submissionService.submitReel(reelId, input);
+    return submissionService.submitReel(request.user.id, reelId, input);
   });
 
-  // Reported by the browser extension scraping CLIPPING's own campaign page (no API exposes
-  // this) — the source of truth BountyMatchingService corrects OCR'd creator identifiers
-  // against before submitting. Upserts by name so re-scraping the same page just refreshes
-  // active/rate/lastSeenAt rather than duplicating rows.
+  // A manual fallback — the primary source is now SyncService's automatic per-sync refresh
+  // (see ClippingBrowserManager.fetchLiveCampaignInfo's bountyTags), which needs no browser
+  // extension at all. Kept in case that live fetch is ever unavailable for an account. Upserts
+  // by name so reporting the same list again just refreshes active/rate/lastSeenAt.
   app.post("/api/clipping/bounties", async (request, reply) => {
     const { bounties } = updateClippingBountiesSchema.parse(request.body);
-    await Promise.all(
-      bounties.map((bounty) =>
-        prisma.clippingBounty.upsert({
-          where: { name: bounty.name },
-          create: { name: bounty.name, active: bounty.active, rate: bounty.rate ?? null },
-          update: { active: bounty.active, rate: bounty.rate ?? null, lastSeenAt: new Date() },
-        })
-      )
+    await upsertBounties(
+      request.user.id,
+      bounties.map((b) => ({ name: b.name, rate: b.rate ?? null, active: b.active }))
     );
     reply.status(204).send();
   });
 
-  app.get("/api/clipping/bounties", async () => {
-    const items = await prisma.clippingBounty.findMany({ orderBy: { name: "asc" } });
+  app.get("/api/clipping/bounties", async (request) => {
+    const items = await prisma.clippingBounty.findMany({ where: { userId: request.user.id }, orderBy: { name: "asc" } });
     return {
       items: items.map((b) => ({
         id: b.id,

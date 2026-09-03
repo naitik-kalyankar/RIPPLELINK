@@ -72,6 +72,13 @@
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
+  /* See main.tsx — only added inside the Tauri desktop build, where the window itself is
+   * transparent and AppShell's rounded corners need real desktop to show through them instead
+   * of body's own opaque background. */
+  body.tauri-transparent-bg {
+    background: transparent;
+  }
+
   ::selection {
     @apply bg-primary/30;
   }

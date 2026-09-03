@@ -54,20 +54,22 @@ export class SubmissionService {
    * Duplicate protection (spec §21): re-check our DB *and* the latest CLIPPING state before
    * ever submitting, rather than trusting a locally cached "linked" flag.
    */
-  async submitReel(reelId: string, input: LinkReelInput) {
+  async submitReel(userId: string, reelId: string, input: LinkReelInput) {
     if (this.inFlightReelIds.has(reelId)) {
       throw new SubmissionInProgressError();
     }
     this.inFlightReelIds.add(reelId);
     try {
-      return await this.submitReelInner(reelId, input);
+      return await this.submitReelInner(userId, reelId, input);
     } finally {
       this.inFlightReelIds.delete(reelId);
     }
   }
 
-  private async submitReelInner(reelId: string, input: LinkReelInput) {
-    const reel = await prisma.reel.findUnique({ where: { id: reelId }, include: reelInclude });
+  private async submitReelInner(userId: string, reelId: string, input: LinkReelInput) {
+    // Scoped by userId, not just id — a Reel id belonging to a DIFFERENT user must 404 exactly
+    // like one that doesn't exist at all, never leak whether it exists or let it be acted on.
+    const reel = await prisma.reel.findUnique({ where: { id: reelId, userId }, include: reelInclude });
     if (!reel) throw new ReelNotFoundError();
     if (reel.clippingSubmission) throw new AlreadyLinkedError();
 
@@ -77,16 +79,17 @@ export class SubmissionService {
     if (externalMatch) {
       await prisma.clippingSubmission.upsert({
         where: { clippingClipId: externalMatch.clippingClipId },
-        create: this.toSubmissionCreateData(externalMatch, reelId),
+        create: this.toSubmissionCreateData(userId, externalMatch, reelId),
         update: this.toSubmissionUpdateData(externalMatch, reelId),
       });
       await prisma.submissionAttempt.create({
-        data: { reelId, status: "already_linked" },
+        data: { userId, reelId, status: "already_linked" },
       });
       await activityLogService.log(
+        userId,
         `Reel ${reel.instagramReelId} already existed in CLIPPING — linked automatically.`
       );
-      return this.reload(reelId);
+      return this.reload(userId, reelId);
     }
 
     // A bounty tag not explicitly given falls back to the Reel's detected creator — same
@@ -97,13 +100,13 @@ export class SubmissionService {
     const candidateBountyTag = input.bountyTag || reel.creator?.detectedIdentifier || reel.detectedIdentifier;
     if (!candidateBountyTag) {
       await prisma.submissionAttempt.create({
-        data: { reelId, status: "failed", errorMessage: new MissingBountyTagError().message },
+        data: { userId, reelId, status: "failed", errorMessage: new MissingBountyTagError().message },
       });
       throw new MissingBountyTagError();
     }
-    const bountyTag = await bountyMatchingService.resolveBountyTag(candidateBountyTag);
+    const bountyTag = await bountyMatchingService.resolveBountyTag(userId, candidateBountyTag);
 
-    await prisma.submissionAttempt.create({ data: { reelId, status: "uploading" } });
+    await prisma.submissionAttempt.create({ data: { userId, reelId, status: "uploading" } });
 
     try {
       const result = await provider.submitClip({
@@ -116,19 +119,19 @@ export class SubmissionService {
         notes: input.notes,
       });
 
-      await prisma.clippingSubmission.create({ data: this.toSubmissionCreateData(result, reelId) });
-      await prisma.submissionAttempt.create({ data: { reelId, status: "uploaded" } });
-      await activityLogService.log(`Submitted Reel ${reel.instagramReelId} to CLIPPING.`);
-      return this.reload(reelId);
+      await prisma.clippingSubmission.create({ data: this.toSubmissionCreateData(userId, result, reelId) });
+      await prisma.submissionAttempt.create({ data: { userId, reelId, status: "uploaded" } });
+      await activityLogService.log(userId, `Submitted Reel ${reel.instagramReelId} to CLIPPING.`);
+      return this.reload(userId, reelId);
     } catch (error) {
       const message = error instanceof ClippingApiError ? error.message : "Unknown submission error.";
-      await prisma.submissionAttempt.create({ data: { reelId, status: "failed", errorMessage: message } });
-      await activityLogService.log(`Failed to submit Reel ${reel.instagramReelId} to CLIPPING: ${message}`, "error");
+      await prisma.submissionAttempt.create({ data: { userId, reelId, status: "failed", errorMessage: message } });
+      await activityLogService.log(userId, `Failed to submit Reel ${reel.instagramReelId} to CLIPPING: ${message}`, "error");
       throw error;
     }
   }
 
-  async bulkSubmit(reelIds: string[], input: LinkReelInput & { bountyTags?: Record<string, string> }) {
+  async bulkSubmit(userId: string, reelIds: string[], input: LinkReelInput & { bountyTags?: Record<string, string> }) {
     const results: Array<{ reelId: string; success: boolean; error?: string }> = [];
     let cursor = 0;
 
@@ -140,7 +143,7 @@ export class SubmissionService {
           // A per-Reel override (collected up front for Reels with no detected creator — see
           // BulkBountyAssignModal) takes precedence over the shared fallback tag.
           const bountyTag = input.bountyTags?.[reelId] ?? input.bountyTag;
-          await this.submitReel(reelId, { ...input, bountyTag });
+          await this.submitReel(userId, reelId, { ...input, bountyTag });
           results[index] = { reelId, success: true };
         } catch (error) {
           const message =
@@ -163,10 +166,12 @@ export class SubmissionService {
   }
 
   private toSubmissionCreateData(
+    userId: string,
     raw: Awaited<ReturnType<typeof clippingService.submitClip>>,
     reelId: string
   ) {
     return {
+      userId,
       reelId,
       clippingClipId: raw.clippingClipId,
       videoId: raw.videoId,
@@ -187,13 +192,27 @@ export class SubmissionService {
     raw: Awaited<ReturnType<typeof clippingService.submitClip>>,
     reelId: string
   ) {
-    const { reelId: _omit, ...rest } = this.toSubmissionCreateData(raw, reelId);
-    return { ...rest, reelId };
+    // Never touches userId — a ClippingSubmission's owner is fixed at creation, this path only
+    // refreshes CLIPPING-reported fields on an existing row.
+    return {
+      reelId,
+      videoId: raw.videoId,
+      campaignId: raw.campaignId,
+      bountyTag: raw.bounty,
+      clippingUrl: raw.url,
+      isBeingTracked: raw.isBeingTracked,
+      views: raw.views,
+      likes: raw.likes,
+      comments: raw.comments,
+      dateAdded: raw.dateAdded,
+      dateCreated: raw.dateCreated,
+      lastUpdated: raw.lastUpdated,
+    };
   }
 
-  private async reload(reelId: string) {
+  private async reload(userId: string, reelId: string) {
     const reel = (await prisma.reel.findUniqueOrThrow({
-      where: { id: reelId },
+      where: { id: reelId, userId },
       include: reelInclude,
     })) as ReelWithRelations;
     return serializeReel(reel);

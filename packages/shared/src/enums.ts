@@ -28,5 +28,20 @@ export const REEL_SORT_FIELDS = [
 ] as const;
 export type ReelSortField = (typeof REEL_SORT_FIELDS)[number];
 
-export const DATE_RANGE_PRESETS = ["today", "yesterday", "last_7_days", "last_30_days", "custom", "all"] as const;
+export const DATE_RANGE_PRESETS = [
+  "today",
+  "yesterday",
+  "last_7_days",
+  "last_30_days",
+  "custom",
+  "all",
+  // Hour-granularity presets — added for "Link All" (see LinkAllMenu), which needs a much
+  // tighter recency window than the day-granularity presets above give: "everything unlinked
+  // from the last 12/24/36 hours" isn't expressible as today/yesterday once it's, say, 2am.
+  "last_12_hours",
+  "last_24_hours",
+  "last_36_hours",
+  "last_48_hours",
+  "last_64_hours",
+] as const;
 export type DateRangePreset = (typeof DATE_RANGE_PRESETS)[number];

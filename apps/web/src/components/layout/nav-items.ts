@@ -2,7 +2,7 @@ import {
   LayoutDashboard,
   Film,
   Instagram,
-  Scissors,
+  DollarSign,
   UploadCloud,
   Settings,
   type LucideIcon,
@@ -19,7 +19,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/reels", label: "Reels", icon: Film },
   { to: "/instagram-accounts", label: "Socials", icon: Instagram },
-  { to: "/clipping", label: "Clipping", icon: Scissors },
+  { to: "/payout", label: "Payout", icon: DollarSign },
   { to: "/upload-queue", label: "Upload Queue", icon: UploadCloud },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

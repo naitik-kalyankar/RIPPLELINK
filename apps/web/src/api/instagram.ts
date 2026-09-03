@@ -34,6 +34,18 @@ export function useUpdateInstagramAccount() {
   });
 }
 
+export function useDeleteInstagramAccount() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete(`/api/instagram/accounts/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["instagram-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["reels"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 export function useSyncInstagramAccount() {
   const queryClient = useQueryClient();
   return useMutation({

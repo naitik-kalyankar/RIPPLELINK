@@ -17,8 +17,9 @@ function serializeCreator(creator: { id: string; detectedIdentifier: string; dis
 // new identifier — there's no manual review/create/merge step or page anymore. This list
 // endpoint is the only thing still needed, e.g. for the Reels page's creator filter dropdown.
 export async function creatorsRoutes(app: FastifyInstance) {
-  app.get("/api/creators", async () => {
+  app.get("/api/creators", async (request) => {
     const creators = await prisma.creator.findMany({
+      where: { userId: request.user.id },
       include: { aliases: true },
       orderBy: { displayName: "asc" },
     });

@@ -11,6 +11,7 @@ export interface IntegrationStatus {
 export interface IntegrationsStatusResponse {
   instagram: IntegrationStatus;
   clipping: IntegrationStatus & { campaignId: string | null };
+  playwright: { installed: boolean };
 }
 
 export function useIntegrationsStatus() {
@@ -19,5 +20,18 @@ export function useIntegrationsStatus() {
     queryFn: () => apiClient.get<IntegrationsStatusResponse>("/api/integrations/status"),
     refetchInterval: 30_000,
     retry: false,
+  });
+}
+
+export interface Me {
+  id: string;
+  isAdmin: boolean;
+}
+
+export function useMe() {
+  return useQuery({
+    queryKey: ["me"],
+    queryFn: () => apiClient.get<Me>("/api/me"),
+    staleTime: 5 * 60_000,
   });
 }

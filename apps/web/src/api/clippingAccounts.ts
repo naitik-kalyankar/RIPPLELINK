@@ -18,6 +18,7 @@ export interface ClippingAccountStatus {
   id: string;
   label: string;
   email: string | null;
+  avatarUrl: string | null;
   apiUrl: string;
   campaignId: string;
   active: boolean;
@@ -82,6 +83,31 @@ export function useLoginClippingAccount() {
   return useMutation({
     mutationFn: (id: string) => apiClient.post<{ message: string }>(`/api/clipping-accounts/${id}/login`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["clipping-accounts"] }),
+  });
+}
+
+// Adding a brand new account: no row exists until sign-in actually succeeds — see
+// routes/clippingAccounts.ts's /login-new. `id` here is a pending-attempt id, not an account
+// id, until the status poll below reports back a real `account`.
+export function useLoginNewClippingAccount() {
+  return useMutation({
+    mutationFn: (campaignId: string) =>
+      apiClient.post<{ id: string; message: string }>("/api/clipping-accounts/login-new", { campaignId }),
+  });
+}
+
+export interface LoginNewStatus {
+  inProgress: boolean;
+  error: string | null;
+  account: ClippingAccountStatus | null;
+}
+
+export function useLoginNewStatus(pendingId: string | null) {
+  return useQuery({
+    queryKey: ["clipping-accounts", "login-new", pendingId],
+    queryFn: () => apiClient.get<LoginNewStatus>(`/api/clipping-accounts/login-new/${pendingId}/status`),
+    enabled: !!pendingId,
+    refetchInterval: (query) => (query.state.data?.inProgress === false ? false : 2_000),
   });
 }
 

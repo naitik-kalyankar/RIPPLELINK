@@ -1,3 +1,5 @@
+import { supabase } from "@/lib/supabaseClient";
+
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
 export class ApiError extends Error {
@@ -12,6 +14,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Every apps/api route requires auth (see server.ts's onRequest hook) — attach the current
+  // Supabase session's access token here, the single choke point all requests already go
+  // through, rather than at every call site.
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+
   let response: Response;
   try {
     response = await fetch(`${API_URL}${path}`, {
@@ -19,10 +27,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       // Fastify's default JSON parser rejects an empty body sent with Content-Type:
       // application/json (FST_ERR_CTP_EMPTY_JSON_BODY) — only set the header when there's
       // actually a body, so no-payload calls like POST /api/sync/all don't 500.
-      headers: { ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}), ...init?.headers },
+      headers: {
+        ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...init?.headers,
+      },
     });
   } catch {
-    throw new ApiError("Could not reach the Reel Manager API. Is the backend running?", 0, "network");
+    throw new ApiError("Could not reach the RIPPLELINK API. Is the backend running?", 0, "network");
   }
 
   if (!response.ok) {

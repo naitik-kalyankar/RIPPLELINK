@@ -1,101 +1,103 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/toast";
-import { useCreateClippingAccount } from "@/api/clippingAccounts";
+import { useLoginNewClippingAccount, useLoginNewStatus } from "@/api/clippingAccounts";
 import { useDefaultClippingCampaignId } from "@/lib/clippingCampaignDefault";
-import { Plus } from "lucide-react";
+import { Loader2, Plus } from "lucide-react";
 
-export function AddClippingAccountModal() {
+export function AddClippingAccountModal({ trigger }: { trigger?: (openModal: () => void) => ReactNode }) {
   const [open, setOpen] = useState(false);
-  const [label, setLabel] = useState("");
+  const [pendingId, setPendingId] = useState<string | null>(null);
   const { value: defaultCampaignId } = useDefaultClippingCampaignId();
-  const [campaignId, setCampaignId] = useState(defaultCampaignId);
-  const create = useCreateClippingAccount();
+  const start = useLoginNewClippingAccount();
+  const { data: status } = useLoginNewStatus(pendingId);
+  const queryClient = useQueryClient();
   const { toast } = useToast();
+  const settledRef = useRef(false);
 
-  const canSubmit = label.trim().length > 0 && campaignId.trim().length > 0;
+  useEffect(() => {
+    if (!status || !pendingId || status.inProgress || settledRef.current) return;
+    settledRef.current = true;
+    queryClient.invalidateQueries({ queryKey: ["clipping-accounts"] });
 
-  const reset = () => {
-    setLabel("");
-    setCampaignId(defaultCampaignId);
+    if (status.account) {
+      toast({
+        title: "Account connected",
+        description: `Signed in as ${status.account.email ?? status.account.label}.`,
+        variant: "success",
+      });
+    } else {
+      toast({
+        title: "Sign-in didn't complete",
+        description: status.error ?? "The browser window was closed before signing in finished.",
+        variant: "destructive",
+      });
+    }
+    setOpen(false);
+    setPendingId(null);
+  }, [status, pendingId, queryClient, toast]);
+
+  const handleOpenChange = (next: boolean) => {
+    // While a sign-in is in flight, the browser window is the thing to close, not this
+    // dialog — ignore overlay/Escape dismiss attempts until it settles.
+    if (!next && pendingId !== null) return;
+    setOpen(next);
   };
 
   const handleSubmit = () => {
-    create.mutate(
-      { label: label.trim(), campaignId: campaignId.trim() },
-      {
-        onSuccess: (account) => {
-          toast({
-            title: `Added "${account.label}"`,
-            description: 'Click "Log in" next to it below to connect it.',
-            variant: "success",
-          });
-          setOpen(false);
-          reset();
-        },
-        onError: (error) => toast({ title: "Could not add account", description: error.message, variant: "destructive" }),
-      }
-    );
+    settledRef.current = false;
+    start.mutate(defaultCampaignId, {
+      onSuccess: (result) => setPendingId(result.id),
+      onError: (error) => toast({ title: "Could not start sign-in", description: error.message, variant: "destructive" }),
+    });
   };
 
+  const busy = start.isPending || pendingId !== null;
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="secondary">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      {trigger ? (
+        trigger(() => setOpen(true))
+      ) : (
+        <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>
           <Plus className="h-3.5 w-3.5" /> Add CLIPPING Account
         </Button>
-      </DialogTrigger>
+      )}
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add CLIPPING Account</DialogTitle>
-          <DialogDescription>
-            Give it a name, then click "Log in" afterward — a browser window will open for you
-            to sign in. We'll detect your email automatically, no need to type it.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid gap-3">
-          <div className="grid gap-1.5">
-            <Label htmlFor="clipping-label">Name</Label>
-            <Input
-              id="clipping-label"
-              placeholder="e.g. Main, Client B"
-              autoFocus
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-            />
+        {busy ? (
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            <div>
+              <p className="text-sm font-medium">Waiting for sign-in</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Finish signing in on the browser window that just opened. This closes on its own once you're done.
+              </p>
+            </div>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="clipping-campaign-id">Campaign ID</Label>
-            <Input
-              id="clipping-campaign-id"
-              placeholder="Found on CLIPPING's campaign page"
-              autoComplete="off"
-              value={campaignId}
-              onChange={(e) => setCampaignId(e.target.value)}
-            />
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>
-            Cancel
-          </Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit || create.isPending}>
-            {create.isPending ? "Adding…" : "Add Account"}
-          </Button>
-        </DialogFooter>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Add CLIPPING Account</DialogTitle>
+              <DialogDescription>
+                A browser window will open next — just sign in there, and we'll take care of the rest.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleSubmit}>Continue</Button>
+            </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

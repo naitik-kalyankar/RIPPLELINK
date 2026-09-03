@@ -71,7 +71,7 @@ export function Topbar({ onOpenMobileNav }: TopbarProps) {
           <Menu className="h-5 w-5" />
         </Button>
         <h2 className="truncate text-sm font-semibold text-foreground sm:text-base">
-          {currentPage?.label ?? "Reel Manager"}
+          {currentPage?.label ?? "RIPPLELINK"}
         </h2>
       </div>
       <div className="flex shrink-0 items-center justify-between gap-2 sm:justify-end sm:gap-3">

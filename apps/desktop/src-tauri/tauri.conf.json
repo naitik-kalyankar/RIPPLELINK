@@ -1,22 +1,26 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Reel Manager",
-  "version": "0.1.0",
+  "productName": "RIPPLELINK",
+  "version": "0.1.1",
   "identifier": "com.kickmanager.reelmanager",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../../web/dist",
-    "beforeDevCommand": "npm run dev --workspace=apps/web",
-    "beforeBuildCommand": "npm run build --workspace=apps/web"
+    "beforeDevCommand": "npm run dev --workspace=@kick-manager/web",
+    "beforeBuildCommand": "npm run build --workspace=@kick-manager/web"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Reel Manager",
+        "title": "RIPPLELINK",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
-        "minHeight": 600
+        "minHeight": 600,
+        "decorations": false,
+        "transparent": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -26,11 +30,25 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
-      "icons/icon.png"
-    ]
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg4RkVDQ0JBNzU0OEI0M0IKUldRN3RFaDF1c3oraUFLOGVIa20rOGlKR1BsaU4vQk5NVWp0RC9BMmtGaS9hMzErcEVoc3d5OFMK",
+      "endpoints": [
+        "https://github.com/naitik-kalyankar/RIPPLELINK/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

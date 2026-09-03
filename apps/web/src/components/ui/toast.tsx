@@ -40,6 +40,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const remove = (id: string) => setItems((prev) => prev.filter((t) => t.id !== id));
+  // Radix flips data-state to "closed" the instant onOpenChange(false) fires, but if we also
+  // remove the item from `items` in that same tick, React unmounts the node before the browser
+  // gets a chance to paint even one frame of the data-[state=closed] exit animation — it would
+  // just vanish. Waiting out the animation's own duration first is what actually lets it play.
+  const closeAfterAnimation = (id: string) => setTimeout(() => remove(id), 160);
 
   return (
     <ToastContext.Provider value={{ toast }}>
@@ -49,10 +54,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <ToastPrimitive.Root
             key={item.id}
             className={cn(
-              "pointer-events-auto grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-lg border border-border bg-card p-4 shadow-lg data-[state=open]:animate-slide-up data-[swipe=end]:animate-fade-in"
+              "pointer-events-auto grid grid-cols-[auto_1fr_auto] items-start gap-3 rounded-lg border border-border bg-card p-4 shadow-lg transition-transform data-[state=open]:animate-slide-up data-[state=closed]:animate-fade-out data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)]"
             )}
             onOpenChange={(open) => {
-              if (!open) remove(item.id);
+              if (!open) closeAfterAnimation(item.id);
             }}
           >
             <div className="pt-0.5">{item.variant && iconByVariant[item.variant]}</div>

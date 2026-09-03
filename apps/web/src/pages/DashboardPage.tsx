@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
 import { useActivityLog, useDashboardStats, type ViewsSource } from "@/api/dashboard";
 import { useClippingCampaign, type ClippingCampaignInfo } from "@/api/clipping";
 import { useClippingAccounts } from "@/api/clippingAccounts";
@@ -83,7 +84,14 @@ function usePayoutCycle(campaign: ClippingCampaignInfo | null | undefined) {
 export function DashboardPage() {
   const { selectedAccount, scopedInstagramAccountIds } = useClippingScope();
   const [viewsSource, setViewsSource] = useViewsSourcePreference();
-  const { data: stats, isLoading, isError } = useDashboardStats(scopedInstagramAccountIds, viewsSource);
+  // "Live" is this app's own Instagram-view-based estimate — with a specific account selected
+  // and zero Instagram accounts linked to it yet, there's nothing for it to estimate from (it
+  // would just show $0, which reads as a bug rather than as "nothing to show"). Falls back to
+  // "clipping" for what's actually displayed WITHOUT touching the persisted preference, so
+  // picking a different (linked) account later still respects whatever the user last chose.
+  const liveUnavailable = !!selectedAccount && (scopedInstagramAccountIds?.length ?? 0) === 0;
+  const effectiveViewsSource = liveUnavailable ? "clipping" : viewsSource;
+  const { data: stats, isLoading, isError } = useDashboardStats(scopedInstagramAccountIds, effectiveViewsSource, selectedAccount?.id);
   const { data: activity } = useActivityLog();
   const { data: campaignData } = useClippingCampaign();
   const { data: clippingAccountsData } = useClippingAccounts();
@@ -136,10 +144,15 @@ export function DashboardPage() {
                   <div className="flex items-center gap-0.5 rounded-full border border-border/70 bg-background/50 p-0.5 text-xs">
                     <button
                       type="button"
+                      disabled={liveUnavailable}
                       onClick={() => setViewsSource("live")}
                       className={cn(
                         "rounded-full px-2.5 py-1 font-medium transition-colors",
-                        viewsSource === "live" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                        liveUnavailable
+                          ? "cursor-not-allowed text-muted-foreground/40"
+                          : effectiveViewsSource === "live"
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground"
                       )}
                     >
                       Live
@@ -149,7 +162,7 @@ export function DashboardPage() {
                       onClick={() => setViewsSource("clipping")}
                       className={cn(
                         "rounded-full px-2.5 py-1 font-medium transition-colors",
-                        viewsSource === "clipping" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                        effectiveViewsSource === "clipping" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
                       )}
                     >
                       CLIPPING
@@ -157,9 +170,11 @@ export function DashboardPage() {
                   </div>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-xs">
-                  {viewsSource === "live"
-                    ? "Our own estimate, based on views we've seen most recently. CLIPPING's numbers can take up to 12 hours to catch up."
-                    : "The exact amount CLIPPING has calculated, updated every time you sync."}
+                  {liveUnavailable
+                    ? "No Instagram account is linked to this CLIPPING account yet, so there's no live view data to estimate from."
+                    : effectiveViewsSource === "live"
+                      ? "Our own estimate, based on views we've seen most recently. CLIPPING's numbers can take up to 12 hours to catch up."
+                      : "The exact amount CLIPPING has calculated, updated every time you sync."}
                 </TooltipContent>
               </Tooltip>
             </CardHeader>
@@ -172,13 +187,13 @@ export function DashboardPage() {
                 <>
                   <div>
                     <p className="text-5xl font-semibold tabular-nums tracking-tight">
-                      {formatCurrency(stats.estimatedPayout)}
+                      <AnimatedNumber value={stats.estimatedPayout} format={formatCurrency} />
                     </p>
                     <p className="mt-2 text-sm font-medium text-muted-foreground">
-                      USDT (ETH) · {viewsSource === "live" ? "our estimate" : "from CLIPPING"}
+                      USDT (ETH) · {effectiveViewsSource === "live" ? "our estimate" : "from CLIPPING"}
                     </p>
                   </div>
-                  {viewsSource === "clipping" && (
+                  {effectiveViewsSource === "clipping" && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -229,7 +244,9 @@ export function DashboardPage() {
                     }}
                   />
                 </svg>
-                <span className="absolute text-2xl font-semibold tabular-nums leading-none">{daysLeft}</span>
+                <span className="absolute text-2xl font-semibold tabular-nums leading-none">
+                  <AnimatedNumber value={daysLeft} />
+                </span>
               </div>
 
               <p className="text-xs font-medium text-muted-foreground">days remaining</p>
@@ -259,7 +276,7 @@ export function DashboardPage() {
                   <Skeleton className="h-8 w-16" />
                 ) : (
                   <span className="text-3xl font-semibold tabular-nums tracking-tight">
-                    {stats[card.key].toLocaleString()}
+                    <AnimatedNumber value={stats[card.key]} />
                   </span>
                 )}
               </CardContent>

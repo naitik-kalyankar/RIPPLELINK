@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { LayoutGrid, List as ListIcon, Link2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { EyeOff, LayoutGrid, List as ListIcon, Link2 } from "lucide-react";
 import type { Reel } from "@kick-manager/shared";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,6 +18,11 @@ import { cn } from "@/lib/utils";
 export function ReelsPage() {
   const [filters, setFilters] = useState<ReelsFilters>({ page: 1, limit: 24, sort: "newest" });
   const [view, setView] = useState<"grid" | "list">("grid");
+  // Privacy/glance mode — hides thumbnails entirely and shows just the creator name, centered,
+  // in green. Useful when screen-sharing or working somewhere the actual Reel content shouldn't
+  // be visible but you still need to see who's who. Persisted across refreshes since it's a
+  // standing preference, not per-session state.
+  const [hideThumbnails, setHideThumbnails] = useState(() => localStorage.getItem("reels:hideThumbnails") === "1");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [linkTarget, setLinkTarget] = useState<Reel | null>(null);
   const [previewTarget, setPreviewTarget] = useState<Reel | null>(null);
@@ -35,6 +40,15 @@ export function ReelsPage() {
     ...filters,
     instagramAccountId: filters.instagramAccountId ?? scopedInstagramAccountIds?.join(","),
   };
+  // Switching CLIPPING accounts (or the page's own Instagram-account filter) changes what
+  // "page 1" even means — whatever page number was scrolled to for the old account can easily
+  // not exist for the new one (fewer Reels), which read as a broken "No Reels match" error
+  // instead of what it actually was: a stale page number left over from before the switch.
+  useEffect(() => {
+    setFilters((f) => (f.page === 1 ? f : { ...f, page: 1 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedInstagramAccountIds?.join(","), filters.instagramAccountId]);
+
   const { data, isLoading } = useReels(effectiveFilters);
   const bulkLink = useBulkLinkReels();
   const campaignId = useCampaignId();
@@ -94,27 +108,44 @@ export function ReelsPage() {
        * the view toggle stay reachable while scrolling a long Reel grid, instead of scrolling
        * away with the rest of the page. */}
       <div
-        className="sticky z-40 flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
+        className="sticky z-40 flex flex-col gap-3 rounded-2xl border border-border bg-card p-3 shadow-sm sm:flex-row sm:items-start"
         style={{ top: "calc(var(--topbar-h, 4rem) + 0.75rem)" }}
       >
         <ReelFilters filters={filters} onChange={setFilters} />
-        <div className="flex shrink-0 items-center gap-1 self-end rounded-md border border-border p-0.5 sm:self-auto">
+        <div className="flex shrink-0 items-center gap-2 self-end sm:self-auto">
           <Button
-            variant={view === "grid" ? "secondary" : "ghost"}
+            variant={hideThumbnails ? "secondary" : "outline"}
             size="icon"
-            onClick={() => setView("grid")}
-            aria-label="Grid view"
+            onClick={() =>
+              setHideThumbnails((v) => {
+                const next = !v;
+                localStorage.setItem("reels:hideThumbnails", next ? "1" : "0");
+                return next;
+              })
+            }
+            aria-label={hideThumbnails ? "Show thumbnails" : "Hide thumbnails"}
+            title={hideThumbnails ? "Show thumbnails" : "Hide thumbnails"}
           >
-            <LayoutGrid className="h-4 w-4" />
+            <EyeOff className="h-4 w-4" />
           </Button>
-          <Button
-            variant={view === "list" ? "secondary" : "ghost"}
-            size="icon"
-            onClick={() => setView("list")}
-            aria-label="List view"
-          >
-            <ListIcon className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
+            <Button
+              variant={view === "grid" ? "secondary" : "ghost"}
+              size="icon"
+              onClick={() => setView("grid")}
+              aria-label="Grid view"
+            >
+              <LayoutGrid className="h-4 w-4" />
+            </Button>
+            <Button
+              variant={view === "list" ? "secondary" : "ghost"}
+              size="icon"
+              onClick={() => setView("list")}
+              aria-label="List view"
+            >
+              <ListIcon className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -155,6 +186,7 @@ export function ReelsPage() {
               onOpenPreview={setPreviewTarget}
               onLink={setLinkTarget}
               bountyRateByName={bountyRateByName}
+              hideThumbnail={hideThumbnails}
             />
           ))}
         </div>

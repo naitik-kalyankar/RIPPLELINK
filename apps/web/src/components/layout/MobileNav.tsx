@@ -1,5 +1,6 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Film, X } from "lucide-react";
+import { X } from "lucide-react";
+import { RippleLinkLogo } from "@/components/branding/Logo";
 import { NavList } from "./NavList";
 import { AccountPanel } from "./AccountPanel";
 
@@ -20,10 +21,10 @@ export function MobileNav({ open, onOpenChange }: MobileNavProps) {
           <DialogPrimitive.Title className="sr-only">Navigation menu</DialogPrimitive.Title>
           <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
             <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-                <Film className="h-4 w-4" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-slate-600 to-slate-800">
+                <RippleLinkLogo className="h-5 w-5" />
               </div>
-              <span className="text-sm font-semibold">Reel Manager</span>
+              <span className="text-sm font-semibold">RIPPLELINK</span>
             </div>
             <DialogPrimitive.Close className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <X className="h-4 w-4" />

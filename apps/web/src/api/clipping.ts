@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ClippingBounty, ClippingSubmission, PaginatedResult, SyncResult } from "@kick-manager/shared";
+import { useQuery } from "@tanstack/react-query";
+import type { ClippingBounty } from "@kick-manager/shared";
 import { apiClient } from "@/lib/apiClient";
 
 export interface ClippingStatus {
@@ -8,19 +8,6 @@ export interface ClippingStatus {
   campaignId: string | null;
   lastSyncAt: string | null;
   uploadedClips: number;
-}
-
-export function useClippingClips(page: number, limit = 20, instagramAccountIds?: string[] | null) {
-  return useQuery({
-    queryKey: ["clipping-clips", page, limit, instagramAccountIds ?? "all"],
-    queryFn: () =>
-      apiClient.get<PaginatedResult<ClippingSubmission>>(
-        `/api/clipping/clips?page=${page}&limit=${limit}${
-          instagramAccountIds ? `&instagramAccountIds=${instagramAccountIds.join(",")}` : ""
-        }`
-      ),
-    placeholderData: (prev) => prev,
-  });
 }
 
 export function useClippingStatus() {
@@ -67,19 +54,5 @@ export function useClippingBounties() {
     queryKey: ["clipping-bounties"],
     queryFn: () => apiClient.get<{ items: ClippingBounty[] }>("/api/clipping/bounties"),
     staleTime: 60_000,
-  });
-}
-
-export function useSyncClipping() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: () => apiClient.post<SyncResult>("/api/clipping/sync"),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["clipping-clips"] });
-      queryClient.invalidateQueries({ queryKey: ["clipping-status"] });
-      queryClient.invalidateQueries({ queryKey: ["reels"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      queryClient.invalidateQueries({ queryKey: ["activity"] });
-    },
   });
 }

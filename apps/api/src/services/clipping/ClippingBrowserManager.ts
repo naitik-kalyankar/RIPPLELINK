@@ -13,6 +13,10 @@ import { ClippingApiError } from "./ClippingService.js";
 export interface ClippingIdentity {
   email: string | null;
   displayName: string | null;
+  // The account's profile photo, straight off CLIPPING's own sidebar avatar — null when the
+  // account has none set (CLIPPING renders its own fallback initial in that case, same as this
+  // app does), never a placeholder URL, so callers can tell "no photo" from "not scraped yet".
+  avatarUrl: string | null;
 }
 
 export interface ClippingLinkedAccount {
@@ -163,8 +167,26 @@ export interface ClippingCampaignInfo {
    * from the campaign's own data (confirmed 100,000 on the "Kick Clipping" campaign — NOT
    * the 1,000 figure the payout calc guessed at before this existed). */
   minViews: number;
+  /** The cutoff CLIPPING itself uses to decide whether a clip counts toward the CURRENT open
+   * cycle — a clip whose video was posted before this shows "NOT TRACKING" on CLIPPING's own
+   * clips list and doesn't count toward payout anymore. null when unavailable (e.g. this came
+   * from the dead HTML-scrape fallback below, which never had this field). */
+  videoStartDate: string | null;
+  /** The campaign's full, live bounty tag list — every creator CLIPPING actually recognizes for
+   * this campaign, with its real per-100k rate and enabled/disabled state. This is what
+   * BountyMatchingService and the Link-Reel flow check a detected creator name against; a name
+   * this app detected locally (OCR'd off a watermark, a folder name, etc.) that ISN'T in here
+   * is exactly what "isn't in CLIPPING's bounty list" means. null when unavailable (the dead
+   * HTML-scrape fallback never had this either).
+   */
+  bounties: { name: string; rate: string | null; active: boolean }[] | null;
 }
 
+// SUPERSEDED — same situation as extractClipperStatsFromHtml above: CLIPPING stopped embedding
+// startDate/days/minViews in the campaign page's SSR payload at some point (confirmed by hand:
+// none of those keys appear in the page's HTML anymore for any account). See
+// fetchLiveCampaignInfo, which reads the real JSON API CLIPPING's own page now calls instead.
+// Left only as a last-resort fallback.
 function extractCampaignFromHtml(html: string): ClippingCampaignInfo | null {
   for (const unescaped of findRscPayloads(html, "campaign")) {
     const objectText = extractBalancedJsonValue(unescaped, '"campaign":{', "{", "}");
@@ -176,10 +198,26 @@ function extractCampaignFromHtml(html: string): ClippingCampaignInfo | null {
         startDate: raw.startDate,
         days: raw.days,
         minViews: typeof raw.minViews === "number" ? raw.minViews : 0,
+        videoStartDate: null,
+        bounties: null,
       };
     } catch {
       continue;
     }
+  }
+  return null;
+}
+
+// The campaign's OWN configured payout method (confirmed by hand: "usdt" for Kick Clipping) —
+// authoritative, unlike guessing from a clipper's own paid history or which of several saved
+// addresses they happen to have filled in. Lives in a different (per-membership) object than
+// extractCampaignFromHtml's startDate/days/minViews one, so this is a plain regex against the
+// raw RSC text rather than balanced-bracket extraction — doesn't need to know that object's
+// exact shape, just that a `"paymentMethod":"<value>"` string sits somewhere in the payload.
+function extractCampaignPaymentMethodFromHtml(html: string): string | null {
+  for (const unescaped of findRscPayloads(html, "paymentMethod")) {
+    const match = unescaped.match(/"paymentMethod":"([a-zA-Z]+)"/);
+    if (match) return match[1].toLowerCase();
   }
   return null;
 }
@@ -202,6 +240,81 @@ export interface ClippingClipperStats {
   bountyBreakdown: ClipperBountyBreakdownEntry[];
 }
 
+// One entry from CLIPPING's real payment history (GET /api/clipper/earnings) — a finalized
+// payment cycle, either already paid (paidAt set) or still pending (paidAt null).
+export interface ClippingEarningsEntry {
+  cycleId: string;
+  campaignId: string;
+  campaignName: string;
+  cycleLabel: string | null;
+  bountyTag: string | null;
+  amount: number;
+  paidAt: string | null;
+  finalizedAt: string | null;
+  // When CLIPPING actually computed this cycle — set even for a still-pending cycle (paidAt and
+  // finalizedAt both null until it's closed out), so this is the one date field guaranteed to
+  // have something to show for a "Pending" row, not just paid/finalized ones.
+  exportedAt: string | null;
+  totalViews: number | null;
+  totalClips: number | null;
+  // Which saved payment method this specific cycle was actually paid out through — CLIPPING
+  // records this per-cycle (not just "whatever's currently saved"), since the account's saved
+  // address/email can change between when a cycle finalizes and later. "usdt" | "usdc" |
+  // "paypal" | null (unset for a not-yet-paid cycle).
+  paymentMethod: string | null;
+  paymentAddress: string | null;
+}
+
+export interface ClippingEarnings {
+  lifetimeTotal: number;
+  pendingTotal: number;
+  history: ClippingEarningsEntry[];
+}
+
+// Every payout destination a clipper has ever saved — CLIPPING lets more than one be filled in
+// at once, but only one is actually used for any given payout (see ClippingEarningsEntry's own
+// paymentMethod/paymentAddress, which record which one a specific cycle actually went through).
+export interface ClippingPaymentSettings {
+  paypalEmail: { email: string; firstName: string | null; lastName: string | null } | null;
+  usdtAddress: string | null;
+  usdcAddress: string | null;
+}
+
+// Lives in the Payments page's own SSR payload (confirmed by hand — NOT part of the
+// /api/clipper/earnings JSON API's response, which only has totals/history), so this needs the
+// same RSC-scrape approach as campaign/account data, not a plain fetch.
+function extractPaymentSettingsFromHtml(html: string): ClippingPaymentSettings | null {
+  for (const unescaped of findRscPayloads(html, "paymentSettings")) {
+    const objectText = extractBalancedJsonValue(unescaped, '"paymentSettings":{', "{", "}");
+    if (!objectText) continue;
+    try {
+      const raw = JSON.parse(objectText) as Record<string, unknown>;
+      const paypal = raw.paypalEmail as Record<string, unknown> | undefined;
+      return {
+        paypalEmail:
+          paypal && typeof paypal.email === "string"
+            ? {
+                email: paypal.email,
+                firstName: typeof paypal.firstName === "string" ? paypal.firstName : null,
+                lastName: typeof paypal.lastName === "string" ? paypal.lastName : null,
+              }
+            : null,
+        usdtAddress: typeof raw.usdtAddress === "string" ? raw.usdtAddress : null,
+        usdcAddress: typeof raw.usdcAddress === "string" ? raw.usdcAddress : null,
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// SUPERSEDED — CLIPPING stopped embedding clipperStats in the campaign page's SSR payload at
+// some point (confirmed by hand: the field is now always literally `null` there for every
+// account). The real, still-accruing "current cycle" figure moved to a dedicated JSON API — see
+// fetchLiveClipperStats below — which this app now uses instead. Left here only as a fallback in
+// case a not-yet-migrated response shape ever ships it embedded again; safe to delete once
+// that's confirmed never to happen.
 function extractClipperStatsFromHtml(html: string): ClippingClipperStats | null {
   for (const unescaped of findRscPayloads(html, "clipperStats")) {
     const objectText = extractBalancedJsonValue(unescaped, '"clipperStats":{', "{", "}");
@@ -242,17 +355,23 @@ function extractClipperStatsFromHtml(html: string): ClippingClipperStats | null 
 // `[data-slot="avatar"]` (the wrapper span, always present) rather than `avatar-fallback`
 // specifically — that only renders when the account has no profile photo, so an account WITH
 // one (rendering `avatar-image` instead) was being silently skipped by the original check.
-async function scrapeIdentityFromPage(page: Page): Promise<{ email: string | null; displayName: string | null } | null> {
+async function scrapeIdentityFromPage(
+  page: Page
+): Promise<{ email: string | null; displayName: string | null; avatarUrl: string | null } | null> {
   return page
     .evaluate(() => {
       const triggers = document.querySelectorAll('[data-slot="dropdown-menu-trigger"]');
       for (const trigger of triggers) {
-        if (!trigger.querySelector('[data-slot="avatar"]')) continue;
+        const avatar = trigger.querySelector('[data-slot="avatar"]');
+        if (!avatar) continue;
         const paragraphs = trigger.querySelectorAll("p");
         if (paragraphs.length < 2) continue;
         const email = paragraphs[1].textContent?.trim();
         if (!email || !email.includes("@")) continue;
-        return { displayName: paragraphs[0].textContent?.trim() || null, email };
+        // Only present when there IS a real photo — an account with none renders
+        // `avatar-fallback` (the initial) instead of an `<img>` at all.
+        const img = avatar.querySelector<HTMLImageElement>('[data-slot="avatar-image"]');
+        return { displayName: paragraphs[0].textContent?.trim() || null, email, avatarUrl: img?.src || null };
       }
       return null;
     })
@@ -275,6 +394,16 @@ function storageStateAbsolutePath(account: Pick<ClippingAccount, "storageStatePa
 class ClippingBrowserManager {
   private browserPromise: Promise<Browser> | null = null;
   private contexts = new Map<string, BrowserContext>();
+
+  /** Cheap check (no launch) for whether `npx playwright install chromium` has been run on
+   * this machine — just confirms the expected binary is on disk. */
+  isChromiumInstalled(): boolean {
+    try {
+      return fs.existsSync(chromium.executablePath());
+    } catch {
+      return false;
+    }
+  }
 
   private async getBrowser(): Promise<Browser> {
     if (!this.browserPromise) {
@@ -336,19 +465,60 @@ class ClippingBrowserManager {
     this.contexts.delete(account.id);
   }
 
-  /** Cheap, no-navigation liveness check: does this account's Playwright context currently
-   * hold a Supabase auth cookie? Doesn't confirm CLIPPING's server still accepts it (that
-   * would need a real request) — just "is a session cookie actually present right now", which
-   * is what the account-switcher's status dot polls every 15s to answer "signed in in the
-   * background or not". Loads the context (from disk storageState if not already cached) but
-   * never navigates a page, so it's safe to call frequently for every account. */
+  // hasLiveCookie's real-request result, briefly cached — a cookie file can keep looking
+  // "present" locally long after CLIPPING itself has stopped honoring it (logged out from
+  // inside an opened window, session revoked server-side, etc.), so the status dot needs an
+  // actual authenticated request to tell green from red correctly, not just cookie presence.
+  // Cached rather than done on every poll (the rail/Settings list can poll every few seconds
+  // for several accounts at once) — 20s keeps it responsive to a real logout without hammering
+  // CLIPPING on every tick.
+  private liveCheckCache = new Map<string, { ok: boolean; checkedAt: number }>();
+  private static readonly LIVE_CHECK_TTL_MS = 20_000;
+
+  /** Is this account ACTUALLY still signed in, as far as CLIPPING's own server is concerned —
+   * not just "does a cookie file happen to still have a token in it". A locally-present cookie
+   * that CLIPPING no longer honors (revoked, logged out from an opened window, etc.) now
+   * correctly reads as signed-out here, which a pure cookie-presence check couldn't tell. */
   async hasLiveCookie(account: Pick<ClippingAccount, "id" | "storageStatePath">): Promise<boolean> {
+    const cached = this.liveCheckCache.get(account.id);
+    if (cached && Date.now() - cached.checkedAt < ClippingBrowserManager.LIVE_CHECK_TTL_MS) return cached.ok;
+
+    let cookie: string;
     try {
       const context = await this.getContext(account);
       const cookies = await context.cookies(`https://${CLIPPING_DOMAIN}`);
-      return cookies.some((c) => AUTH_COOKIE_PATTERN.test(c.name));
+      if (!cookies.some((c) => AUTH_COOKIE_PATTERN.test(c.name))) {
+        this.liveCheckCache.set(account.id, { ok: false, checkedAt: Date.now() });
+        return false;
+      }
+      cookie = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
     } catch {
+      this.liveCheckCache.set(account.id, { ok: false, checkedAt: Date.now() });
       return false;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6_000);
+      const response = await fetch(`https://${CLIPPING_DOMAIN}/api/clipper/earnings`, {
+        headers: { Cookie: cookie },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeout));
+      // 401/403 (rejected outright) means definitively signed out — anything else (including a
+      // network hiccup or an unexpected non-auth error) falls back to the last known state
+      // rather than flashing red on a transient blip.
+      if (response.status === 401 || response.status === 403) {
+        this.liveCheckCache.set(account.id, { ok: false, checkedAt: Date.now() });
+        return false;
+      }
+      const ok = response.ok;
+      this.liveCheckCache.set(account.id, { ok, checkedAt: Date.now() });
+      return ok;
+    } catch {
+      // Couldn't reach CLIPPING at all — don't let a network blip flip a genuinely-live account
+      // to red; just keep whatever it last confirmed (defaults to true — cookie-present — the
+      // very first time, matching the old behavior when nothing's been checked yet).
+      return cached?.ok ?? true;
     }
   }
 
@@ -402,7 +572,7 @@ class ClippingBrowserManager {
   async getDecodedIdentity(account: Pick<ClippingAccount, "id" | "storageStatePath">): Promise<ClippingIdentity> {
     const context = await this.getContext(account);
     const page = await context.newPage();
-    let scraped: { email: string | null; displayName: string | null } | null = null;
+    let scraped: { email: string | null; displayName: string | null; avatarUrl: string | null } | null = null;
     try {
       // /dashboard, not the bare domain — that's CLIPPING's public marketing homepage and
       // never renders the account switcher regardless of login state.
@@ -416,7 +586,7 @@ class ClippingBrowserManager {
 
     const cookieEmail = decodeEmailFromCookies(await context.cookies(`https://${CLIPPING_DOMAIN}`));
     await this.evictIfSessionDied(account);
-    return { email: scraped?.email ?? cookieEmail, displayName: scraped?.displayName ?? null };
+    return { email: scraped?.email ?? cookieEmail, displayName: scraped?.displayName ?? null, avatarUrl: scraped?.avatarUrl ?? null };
   }
 
   /** Every social account (Instagram or otherwise) linked to this CLIPPING login, with
@@ -448,16 +618,117 @@ class ClippingBrowserManager {
    * together (see SyncService, which wants both). `slug` defaults to "kick-clipping", the one
    * campaign every account in this app is currently on (its campaignId matches the page's own
    * `_id`); pass a different slug if a ClippingAccount is ever added on a different campaign. */
-  async getCampaignPageData(
+  /** The still-accruing "current cycle" payout for THIS login — a real JSON API (confirmed by
+   * watching the campaign page's own network requests, same way /api/clipper/earnings was
+   * found), authenticated the same cookie-based way as everything else in this file. Replaced
+   * extractClipperStatsFromHtml above once CLIPPING stopped embedding this in the campaign
+   * page's SSR payload — same reasoning as getEarnings needing a real fetch instead of a page
+   * scrape, just for a different figure. */
+  private async fetchLiveClipperStats(
     account: Pick<ClippingAccount, "id" | "storageStatePath">,
+    campaignId: string
+  ): Promise<ClippingClipperStats | null> {
+    const cookie = await this.getSessionCookie(account);
+    const response = await fetch(`https://${CLIPPING_DOMAIN}/api/campaigns/${campaignId}/clipper-stats`, {
+      headers: { Cookie: cookie },
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { success?: boolean; data?: unknown };
+    if (!body.success || !body.data) return null;
+
+    const raw = body.data as Record<string, unknown>;
+    const payout = raw.payout as Record<string, unknown> | undefined;
+    if (!payout || typeof payout.totalBountyPayout !== "number") return null;
+    const rawBreakdown = Array.isArray(payout.bountyBreakdown) ? payout.bountyBreakdown : [];
+    return {
+      totalViews: typeof raw.totalViews === "number" ? raw.totalViews : 0,
+      totalPayout: payout.totalBountyPayout,
+      bountyBreakdown: rawBreakdown
+        .filter((b): b is Record<string, unknown> => typeof b === "object" && b !== null)
+        .map((b) => ({
+          bounty: String(b.bounty ?? ""),
+          views: typeof b.views === "number" ? b.views : 0,
+          rate: typeof b.rate === "number" ? b.rate : 0,
+          payout: typeof b.payout === "number" ? b.payout : 0,
+          minViewsRequired: typeof b.minViewsRequired === "number" ? b.minViewsRequired : 0,
+          minViewsReached: Boolean(b.minViewsReached),
+        }))
+        .filter((b) => b.bounty),
+    };
+  }
+
+  /** The campaign's own config (startDate/days/minViews/videoStartDate) — a real JSON API
+   * (confirmed the same way as fetchLiveClipperStats), replacing extractCampaignFromHtml once
+   * CLIPPING stopped embedding this in the campaign page's SSR payload too. Unlike
+   * fetchLiveClipperStats this isn't clipper-specific — same response for every account on the
+   * campaign — but it's still fetched with this account's cookie since the endpoint requires
+   * being signed in at all. */
+  private async fetchLiveCampaignInfo(
+    account: Pick<ClippingAccount, "id" | "storageStatePath">,
+    campaignId: string
+  ): Promise<ClippingCampaignInfo | null> {
+    const cookie = await this.getSessionCookie(account);
+    const response = await fetch(`https://${CLIPPING_DOMAIN}/api/campaigns/${campaignId}`, {
+      headers: { Cookie: cookie },
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { success?: boolean; data?: unknown };
+    if (!body.success || !body.data) return null;
+
+    const raw = body.data as Record<string, unknown>;
+    if (typeof raw.startDate !== "string" || typeof raw.days !== "number") return null;
+
+    // Keyed by tag name — {tag, rate: number, enabled: boolean, status, cap, ...}. `rate` is a
+    // plain number (e.g. 30, meaning $30/100K) — reformatted to the "$X/100K" string every
+    // other rate consumer in this app already parses (see parseRatePer100k in both
+    // routes/dashboard.ts and the frontend's reelPayout.ts), so this slots into the existing
+    // ClippingBounty.rate column/format without needing to touch either of those.
+    const rawBountyTags = raw.bountyTags as Record<string, unknown> | undefined;
+    const bounties =
+      rawBountyTags && typeof rawBountyTags === "object"
+        ? Object.entries(rawBountyTags)
+            .map(([name, value]) => {
+              if (typeof value !== "object" || value === null) return null;
+              const entry = value as Record<string, unknown>;
+              return {
+                name,
+                rate: typeof entry.rate === "number" ? `$${entry.rate}/100K` : null,
+                active: Boolean(entry.enabled),
+              };
+            })
+            .filter((b): b is { name: string; rate: string | null; active: boolean } => b !== null)
+        : null;
+
+    return {
+      startDate: raw.startDate,
+      days: raw.days,
+      minViews: typeof raw.minViews === "number" ? raw.minViews : 0,
+      videoStartDate: typeof raw.videoStartDate === "string" ? raw.videoStartDate : null,
+      bounties,
+    };
+  }
+
+  async getCampaignPageData(
+    account: Pick<ClippingAccount, "id" | "storageStatePath" | "campaignId">,
     slug = "kick-clipping"
-  ): Promise<{ campaign: ClippingCampaignInfo | null; clipperStats: ClippingClipperStats | null }> {
+  ): Promise<{ campaign: ClippingCampaignInfo | null; clipperStats: ClippingClipperStats | null; paymentMethod: string | null }> {
     const context = await this.getContext(account);
     const page = await context.newPage();
     try {
-      await page.goto(`https://${CLIPPING_DOMAIN}/dashboard/campaigns/${slug}`, { waitUntil: "networkidle", timeout: 30_000 });
+      const [, liveClipperStats, liveCampaign] = await Promise.all([
+        page.goto(`https://${CLIPPING_DOMAIN}/dashboard/campaigns/${slug}`, { waitUntil: "networkidle", timeout: 30_000 }),
+        this.fetchLiveClipperStats(account, account.campaignId).catch(() => null),
+        this.fetchLiveCampaignInfo(account, account.campaignId).catch(() => null),
+      ]);
       const html = await page.content();
-      return { campaign: extractCampaignFromHtml(html), clipperStats: extractClipperStatsFromHtml(html) };
+      return {
+        // The SSR-embedded fields are dead (see extractCampaignFromHtml's own comment) — fall
+        // back to it only if the real API ever comes back empty, so a still-unknown future
+        // regression on CLIPPING's side doesn't silently blank this out either.
+        campaign: liveCampaign ?? extractCampaignFromHtml(html),
+        clipperStats: liveClipperStats ?? extractClipperStatsFromHtml(html),
+        paymentMethod: extractCampaignPaymentMethodFromHtml(html),
+      };
     } catch (error) {
       throw new ClippingApiError(
         `Failed to read campaign info from CLIPPING: ${error instanceof Error ? error.message : String(error)}`,
@@ -470,17 +741,84 @@ class ClippingBrowserManager {
   }
 
   async getCampaignInfo(
-    account: Pick<ClippingAccount, "id" | "storageStatePath">,
+    account: Pick<ClippingAccount, "id" | "storageStatePath" | "campaignId">,
     slug = "kick-clipping"
   ): Promise<ClippingCampaignInfo | null> {
     return (await this.getCampaignPageData(account, slug)).campaign;
   }
 
   async getClipperStats(
-    account: Pick<ClippingAccount, "id" | "storageStatePath">,
+    account: Pick<ClippingAccount, "id" | "storageStatePath" | "campaignId">,
     slug = "kick-clipping"
   ): Promise<ClippingClipperStats | null> {
     return (await this.getCampaignPageData(account, slug)).clipperStats;
+  }
+
+  /** CLIPPING's own real payment history — a genuine JSON API (confirmed by watching the
+   * Payments page's network requests; unlike campaign/account data, this isn't embedded in the
+   * page's SSR payload), authenticated the same way as HttpClippingProvider: a plain fetch with
+   * the account's session cookie, no page navigation/Playwright page needed at all. */
+  async getEarnings(account: Pick<ClippingAccount, "id" | "storageStatePath">): Promise<ClippingEarnings | null> {
+    const cookie = await this.getSessionCookie(account);
+    const response = await fetch(`https://${CLIPPING_DOMAIN}/api/clipper/earnings`, {
+      headers: { Cookie: cookie },
+    });
+    if (!response.ok) {
+      throw new ClippingApiError(`Failed to read payments from CLIPPING (status ${response.status}).`, "unavailable");
+    }
+    const body = (await response.json()) as { success?: boolean; data?: unknown };
+    if (!body.success || !body.data) return null;
+
+    const raw = body.data as Record<string, unknown>;
+    const history = Array.isArray(raw.history) ? (raw.history as Record<string, unknown>[]) : [];
+    return {
+      lifetimeTotal: typeof raw.lifetimeTotal === "number" ? raw.lifetimeTotal : 0,
+      pendingTotal: typeof raw.pendingTotal === "number" ? raw.pendingTotal : 0,
+      history: history
+        .map((entry): ClippingEarningsEntry | null => {
+          const campaignId = typeof entry.campaignId === "string" ? entry.campaignId : null;
+          const amount = typeof entry.amount === "number" ? entry.amount : null;
+          if (!campaignId || amount === null) return null;
+          return {
+            cycleId: typeof entry.cycleId === "string" ? entry.cycleId : "",
+            campaignId,
+            campaignName: typeof entry.campaignName === "string" ? entry.campaignName : "",
+            cycleLabel: typeof entry.cycleLabel === "string" ? entry.cycleLabel : null,
+            bountyTag: typeof entry.bountyTag === "string" ? entry.bountyTag : null,
+            amount,
+            paidAt: typeof entry.paidAt === "string" ? entry.paidAt : null,
+            finalizedAt: typeof entry.finalizedAt === "string" ? entry.finalizedAt : null,
+            exportedAt: typeof entry.exportedAt === "string" ? entry.exportedAt : null,
+            totalViews: typeof entry.totalViews === "number" ? entry.totalViews : null,
+            totalClips: typeof entry.totalClips === "number" ? entry.totalClips : null,
+            paymentMethod: typeof entry.paymentMethod === "string" ? entry.paymentMethod : null,
+            paymentAddress: typeof entry.paymentAddress === "string" ? entry.paymentAddress : null,
+          };
+        })
+        .filter((e): e is ClippingEarningsEntry => e !== null),
+    };
+  }
+
+  /** Every payment method this clipper has saved — read off the Payments page's own SSR
+   * payload (see extractPaymentSettingsFromHtml). */
+  async getPaymentSettings(
+    account: Pick<ClippingAccount, "id" | "storageStatePath">
+  ): Promise<ClippingPaymentSettings | null> {
+    const context = await this.getContext(account);
+    const page = await context.newPage();
+    try {
+      await page.goto(`https://${CLIPPING_DOMAIN}/dashboard/payments`, { waitUntil: "networkidle", timeout: 30_000 });
+      const html = await page.content();
+      return extractPaymentSettingsFromHtml(html);
+    } catch (error) {
+      throw new ClippingApiError(
+        `Failed to read payment settings from CLIPPING: ${error instanceof Error ? error.message : String(error)}`,
+        "unavailable"
+      );
+    } finally {
+      await page.close();
+      await this.evictIfSessionDied(account);
+    }
   }
 
   /** Lets Supabase's own client-side code refresh a stale token by loading a real page in
@@ -546,17 +884,28 @@ class ClippingBrowserManager {
 
     try {
       const browser = await chromium.launch({ headless: false });
-      const context = await browser.newContext();
+      // Reuse this account's saved profile if one exists, instead of always starting from a
+      // blank context — a blank context has no Discord session either, so CLIPPING's
+      // Discord-OAuth login treats every re-log-in as a brand new, unrecognized device and
+      // demands a "new location detected" email verification every single time. Reusing the
+      // existing cookies (even though the CLIPPING side is what's actually stale/expired here)
+      // keeps Discord's OWN trust of this browser intact, so only CLIPPING's login is needed.
+      const statePath = storageStateAbsolutePath(account);
+      const context = await browser.newContext(fs.existsSync(statePath) ? { storageState: statePath } : {});
       const page = await context.newPage();
       await page.goto(`https://${CLIPPING_DOMAIN}/auth/login`, { waitUntil: "load" });
       // Tells the human which of possibly several CLIPPING accounts this window is for —
       // there's nothing in CLIPPING's own login page that says so, and re-logging into the
       // wrong one (easy to do with several accounts open) silently overwrites this slot's
       // session with a different account's, corrupting which login this app thinks it has.
+      // Only meaningful once there's a real expected identity to name — a brand new slot has
+      // no email/label yet ("New account" would be a confusing thing to ask someone to log in
+      // as), so it gets a generic prompt instead.
+      const bannerText = expectedEmail ? `Please log in as "${account.label}"` : "Log in to continue";
       await page
-        .evaluate((label: string) => {
+        .evaluate((text: string) => {
           const banner = document.createElement("div");
-          banner.textContent = `Please log in as "${label}"`;
+          banner.textContent = text;
           Object.assign(banner.style, {
             position: "fixed",
             top: "0",
@@ -570,7 +919,7 @@ class ClippingBrowserManager {
             textAlign: "center",
           });
           document.body.prepend(banner);
-        }, account.label)
+        }, bannerText)
         .catch(() => {});
 
       const deadline = Date.now() + 10 * 60 * 1000; // 10 minutes to log in by hand
@@ -597,7 +946,11 @@ class ClippingBrowserManager {
         .catch(() => {});
       const scraped = await scrapeIdentityFromPage(page);
       const cookieEmail = decodeEmailFromCookies(await context.cookies(`https://${CLIPPING_DOMAIN}`));
-      const identity: ClippingIdentity = { email: scraped?.email ?? cookieEmail, displayName: scraped?.displayName ?? null };
+      const identity: ClippingIdentity = {
+        email: scraped?.email ?? cookieEmail,
+        displayName: scraped?.displayName ?? null,
+        avatarUrl: scraped?.avatarUrl ?? null,
+      };
 
       if (expectedEmail && identity.email && identity.email.toLowerCase() !== expectedEmail.toLowerCase()) {
         await browser.close().catch(() => {});
@@ -626,10 +979,25 @@ class ClippingBrowserManager {
       return identity;
     } catch (error) {
       this.lastLoginError.set(account.id, error instanceof Error ? error.message : String(error));
-      throw error;
-    } finally {
       this.loginInProgress.delete(account.id);
+      throw error;
     }
+    // On success, loginInProgress is deliberately left set — the caller (routes/
+    // clippingAccounts.ts) still has to persist lastLoginAt to the DB before hasStorageState
+    // reflects the new session, and clearing it here would let a poll catch loginInProgress:false
+    // with hasStorageState still false, reading as an instant failure right after a real
+    // success. The caller clears it (via markLoginSettled) once that write lands.
+  }
+
+  markLoginSettled(accountId: string): void {
+    this.loginInProgress.delete(accountId);
+  }
+
+  /** Rejects a login after the fact (e.g. the signed-in CLIPPING account turned out to already
+   * be linked as a different row) — surfaces as lastLoginError, same as any other login
+   * failure, without ever having thrown out of loginHeaded itself. */
+  setLoginError(accountId: string, message: string): void {
+    this.lastLoginError.set(accountId, message);
   }
 
   // Tracks in-flight "open in a visible window" requests the same way loginInProgress does —
@@ -658,35 +1026,41 @@ class ClippingBrowserManager {
   async openHeaded(
     account: Pick<ClippingAccount, "id" | "storageStatePath" | "label">,
     expectedEmail?: string | null,
-    path_ = "/dashboard"
+    path_ = "/dashboard",
+    // Fires (once) the first time a real, matching identity is scraped inside this window —
+    // covers the "opened this because the account was signed out, then logged in from inside
+    // it" case, so the rest of the app (lastLoginAt, email/label) picks it up the same way a
+    // real Log-in does, not just the storageState file on disk.
+    onIdentityConfirmed?: (identity: ClippingIdentity) => void
   ): Promise<void> {
     const statePath = storageStateAbsolutePath(account);
-    if (!fs.existsSync(statePath)) {
-      throw new ClippingApiError(
-        "This account hasn't been logged in yet — use Log in first, then Open will reuse that session.",
-        "auth"
-      );
-    }
+    // No longer requires a prior login — CLIPPING itself redirects an unauthenticated request
+    // for `path_` to /auth/login, so opening a signed-out account just lands the human on the
+    // login page inside the SAME persistent profile (Discord already trusts it) instead of
+    // needing the separate Log-in flow's blank context.
+    const hasState = fs.existsSync(statePath);
 
     this.openInProgress.add(account.id);
     this.lastOpenError.delete(account.id);
     let browser: Browser | undefined;
     try {
       browser = await chromium.launch({ headless: false });
-      const context = await browser.newContext({ storageState: statePath });
+      const context = await browser.newContext(hasState ? { storageState: statePath } : {});
       const page = await context.newPage();
       await page.goto(`https://${CLIPPING_DOMAIN}${path_}`, { waitUntil: "load", timeout: 30_000 });
 
       // Playwright can't read a context's storageState once it's already closed (confirmed —
       // it throws "Target ... has been closed"), and there's no reliable hook that fires
       // *before* a human closes a real browser window, so a final on-close snapshot isn't
-      // possible. Snapshotting periodically while the window is open is the practical
-      // alternative — whatever changed (e.g. a token refresh) is captured within 30s of
-      // happening rather than lost when the window closes. Before each snapshot, check whose
-      // account is actually signed in right now — a human can sign out and into a DIFFERENT
-      // CLIPPING account inside this window, and blindly persisting that would silently
-      // overwrite this slot's saved session with the wrong account's.
-      const snapshotInterval = setInterval(async () => {
+      // possible. Snapshotting periodically is the fallback, but a login performed inside this
+      // window needs to survive a human closing it right after — so also snapshot eagerly on
+      // every navigation (a real login redirects at least once, e.g. to /dashboard), which
+      // catches it within a second or two instead of waiting up to a full interval tick. Before
+      // each snapshot, check whose account is actually signed in right now — a human can sign
+      // out and into a DIFFERENT CLIPPING account inside this window, and blindly persisting
+      // that would silently overwrite this slot's saved session with the wrong account's.
+      let identityConfirmed = false;
+      const trySnapshot = async () => {
         if (page.isClosed()) return;
         const identity = await scrapeIdentityFromPage(page).catch(() => null);
         if (expectedEmail && identity?.email && identity.email.toLowerCase() !== expectedEmail.toLowerCase()) {
@@ -698,7 +1072,24 @@ class ClippingBrowserManager {
         }
         this.lastOpenError.delete(account.id);
         await context.storageState({ path: statePath }).catch(() => {});
-      }, 30_000);
+        if (identity?.email && !identityConfirmed) {
+          identityConfirmed = true;
+          onIdentityConfirmed?.(identity);
+          // The SHARED background context (what sync/getSessionCookie/hasLiveCookie actually
+          // use) is a completely separate Playwright context from this standalone window —
+          // saving the fresh session to disk above doesn't make it pick that up on its own.
+          // Drop it so the next call reloads fresh from the file we just wrote, instead of
+          // continuing to use whatever (possibly signed-out) cookies it already had cached.
+          const stale = this.contexts.get(account.id);
+          if (stale) {
+            stale.close().catch(() => {});
+            this.contexts.delete(account.id);
+          }
+        }
+      };
+
+      page.on("framenavigated", () => void trySnapshot());
+      const snapshotInterval = setInterval(trySnapshot, 5_000);
 
       const finish = () => {
         clearInterval(snapshotInterval);

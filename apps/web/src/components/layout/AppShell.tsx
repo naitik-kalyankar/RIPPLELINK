@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Outlet } from "react-router-dom";
+import { AccountRail } from "./AccountRail";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { MobileNav } from "./MobileNav";
 import { LinkingProgressBar } from "./LinkingProgressBar";
 import { ProgressiveBlur } from "./ProgressiveBlur";
+import { UpdateBanner } from "./UpdateBanner";
 import { cn } from "@/lib/utils";
 
 export function AppShell() {
@@ -41,7 +43,10 @@ export function AppShell() {
   }, []);
 
   return (
-    <div className="flex h-screen w-full gap-3 overflow-hidden bg-background p-3">
+    // TitleBar and the window's rounded-corner treatment now live in DesktopWindowFrame (see
+    // App.tsx), which wraps every screen — not just this one — so login/onboarding get them too.
+    <div className="flex h-full w-full gap-3 overflow-hidden bg-background px-3 pb-3 pt-3">
+      <AccountRail />
       <Sidebar />
       <MobileNav open={mobileNavOpen} onOpenChange={setMobileNavOpen} />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -68,6 +73,7 @@ export function AppShell() {
         </main>
       </div>
       <LinkingProgressBar />
+      <UpdateBanner />
     </div>
   );
 }

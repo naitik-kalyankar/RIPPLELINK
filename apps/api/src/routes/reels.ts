@@ -30,6 +30,16 @@ function dateRangeToFilter(dateRange: string, dateFrom?: string, dateTo?: string
       from.setDate(from.getDate() - 30);
       return { gte: from };
     }
+    case "last_12_hours":
+      return { gte: new Date(now.getTime() - 12 * 60 * 60 * 1000) };
+    case "last_24_hours":
+      return { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) };
+    case "last_36_hours":
+      return { gte: new Date(now.getTime() - 36 * 60 * 60 * 1000) };
+    case "last_48_hours":
+      return { gte: new Date(now.getTime() - 48 * 60 * 60 * 1000) };
+    case "last_64_hours":
+      return { gte: new Date(now.getTime() - 64 * 60 * 60 * 1000) };
     case "custom":
       return {
         ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
@@ -67,6 +77,7 @@ export async function reelsRoutes(app: FastifyInstance) {
     const query = reelsQuerySchema.parse(request.query);
 
     const where: Prisma.ReelWhereInput = {
+      userId: request.user.id,
       ...(query.creatorId ? { creatorId: query.creatorId } : {}),
       // Comma-separated: a single id (the per-page account dropdown) or several (the sidebar's
       // CLIPPING-account scope, joined client-side) both flow through the same param/field.
@@ -126,7 +137,7 @@ export async function reelsRoutes(app: FastifyInstance) {
 
   app.get("/api/reels/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const reel = await prisma.reel.findUnique({ where: { id }, include: reelInclude });
+    const reel = await prisma.reel.findUnique({ where: { id, userId: request.user.id }, include: reelInclude });
     if (!reel) {
       reply.status(404).send({ error: "not_found", message: "Reel not found." });
       return;
@@ -141,11 +152,16 @@ export async function reelsRoutes(app: FastifyInstance) {
   // modal can offer it immediately rather than leaving the bounty field for the user to fill
   // in blind. There's no separate manual-assign endpoint anymore — CreatorDetectionService
   // auto-creates a Creator the moment an identifier is detected, so this is the only path.
-  app.post("/api/reels/:id/detect-creator", async (request) => {
+  app.post("/api/reels/:id/detect-creator", async (request, reply) => {
     const { id } = request.params as { id: string };
-    const target = await prisma.reel.findUniqueOrThrow({ where: { id } });
+    const userId = request.user.id;
+    const target = await prisma.reel.findUnique({ where: { id, userId } });
+    if (!target) {
+      reply.status(404).send({ error: "not_found", message: "Reel not found." });
+      return;
+    }
 
-    const detection = await creatorDetectionService.resolveForReel(target.thumbnailUrl);
+    const detection = await creatorDetectionService.resolveForReel(userId, target.thumbnailUrl);
 
     const reel = await prisma.reel.update({
       where: { id },
@@ -158,7 +174,7 @@ export async function reelsRoutes(app: FastifyInstance) {
     });
 
     const suggestedBountyTag = detection.detectedIdentifier
-      ? await bountyMatchingService.resolveBountyTag(detection.detectedIdentifier)
+      ? await bountyMatchingService.resolveBountyTag(userId, detection.detectedIdentifier)
       : null;
 
     return { reel: serializeReel(reel as ReelWithRelations), suggestedBountyTag };
@@ -167,16 +183,16 @@ export async function reelsRoutes(app: FastifyInstance) {
   app.post("/api/reels/:id/link", async (request) => {
     const { id } = request.params as { id: string };
     const body = linkReelSchema.parse(request.body);
-    return submissionService.submitReel(id, body);
+    return submissionService.submitReel(request.user.id, id, body);
   });
 
   app.post("/api/reels/bulk-link", async (request) => {
     const body = bulkLinkSchema.parse(request.body);
-    const results = await submissionService.bulkSubmit(body.reelIds, body);
+    const results = await submissionService.bulkSubmit(request.user.id, body.reelIds, body);
     return { results };
   });
 
-  app.post("/api/reels/sync", async () => {
-    return syncService.syncInstagram();
+  app.post("/api/reels/sync", async (request) => {
+    return syncService.syncInstagram(request.user.id);
   });
 }

@@ -124,3 +124,15 @@ export const updateClippingBountiesSchema = z.object({
     .min(1),
 });
 export type UpdateClippingBountiesInput = z.infer<typeof updateClippingBountiesSchema>;
+
+export const createPayoutSplitSchema = z.object({
+  name: z.string().min(1),
+  percentage: z.number().min(0).max(100),
+});
+export type CreatePayoutSplitInput = z.infer<typeof createPayoutSplitSchema>;
+
+export const updatePayoutSplitSchema = z.object({
+  name: z.string().min(1).optional(),
+  percentage: z.number().min(0).max(100).optional(),
+});
+export type UpdatePayoutSplitInput = z.infer<typeof updatePayoutSplitSchema>;

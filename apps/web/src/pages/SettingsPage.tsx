@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronUp, ExternalLink, RotateCcw } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, ChevronDown, ChevronUp, Copy, ExternalLink, RotateCcw, Terminal } from "lucide-react";
 import type { ClippingAccountStatus } from "@/api/clippingAccounts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { StatusDot } from "@/components/layout/StatusDot";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SlideToConfirm } from "@/components/ui/slide-to-confirm";
+import { useIntegrationsStatus } from "@/api/integrations";
 import { getPlatform } from "@/platform";
 import {
   useClippingAccounts,
@@ -16,6 +21,7 @@ import {
 } from "@/api/clippingAccounts";
 import { useClippingScope } from "@/lib/clippingScope";
 import { DEFAULT_CLIPPING_CAMPAIGN_ID, useDefaultClippingCampaignId } from "@/lib/clippingCampaignDefault";
+import { useAuth } from "@/lib/auth";
 import { AddClippingAccountModal } from "@/components/instagram/AddClippingAccountModal";
 import { useToast } from "@/components/ui/toast";
 import { cn, formatCurrency, formatRelativeTime } from "@/lib/utils";
@@ -41,6 +47,7 @@ function ClippingAccountRow({ account }: { account: ClippingAccountStatus }) {
   const deactivate = useDeactivateClippingAccount();
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
+  const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
 
   const isActive = account.id === selectedId;
   const status = accountStatus(account);
@@ -114,8 +121,12 @@ function ClippingAccountRow({ account }: { account: ClippingAccountStatus }) {
             <Button
               variant="outline"
               size="sm"
-              disabled={!account.hasStorageState || account.openInProgress || openAccount.isPending}
-              title={!account.hasStorageState ? "Log in first, then you can open it." : "Opens a browser window showing this account, already signed in."}
+              disabled={account.openInProgress || openAccount.isPending}
+              title={
+                account.hasStorageState
+                  ? "Opens a browser window showing this account, already signed in."
+                  : "Opens a browser window to sign in — reuses this account's browser profile, so you won't need to re-verify Discord."
+              }
               onClick={() =>
                 openAccount.mutate(account.id, {
                   onError: (error) => toast({ title: "Couldn't open", description: error.message, variant: "destructive" }),
@@ -152,18 +163,137 @@ function ClippingAccountRow({ account }: { account: ClippingAccountStatus }) {
               size="sm"
               className="ml-auto text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
               disabled={deactivate.isPending}
-              onClick={() =>
-                deactivate.mutate(account.id, {
-                  onSuccess: () => {
-                    if (isActive) setSelectedId(null);
-                    toast({ title: `Removed "${account.label}"` });
-                  },
-                })
-              }
+              onClick={() => setConfirmRemoveOpen(true)}
             >
               Remove
             </Button>
           </div>
+        </div>
+      )}
+
+      <Dialog open={confirmRemoveOpen} onOpenChange={setConfirmRemoveOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove "{account.label}"?</DialogTitle>
+            <DialogDescription>
+              This disconnects it from RIPPLELINK. You can add it again later, but you'll need to sign in again.
+            </DialogDescription>
+          </DialogHeader>
+          <SlideToConfirm
+            label="Slide to remove"
+            confirmedLabel="Removing…"
+            disabled={deactivate.isPending}
+            onConfirm={() =>
+              deactivate.mutate(account.id, {
+                onSuccess: () => {
+                  if (isActive) setSelectedId(null);
+                  setConfirmRemoveOpen(false);
+                  toast({ title: `Removed "${account.label}"` });
+                },
+                onError: (error) => {
+                  setConfirmRemoveOpen(false);
+                  toast({ title: "Couldn't remove", description: error.message, variant: "destructive" });
+                },
+              })
+            }
+          />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+const PLAYWRIGHT_INSTALL_COMMAND = "npx playwright install chromium";
+
+// CLIPPING login/sync runs through a real Chromium browser (Playwright), which needs a
+// one-time install separate from the app itself — surfaced here so a first-time user isn't
+// left guessing after a cryptic "Failed to launch Playwright's Chromium" error the first time
+// they click Log in.
+function PlaywrightSetupNotice() {
+  const [expanded, setExpanded] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<{ success: boolean; output: string } | null>(null);
+  const [platformKind, setPlatformKind] = useState<string>("browser");
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { data: integrations } = useIntegrationsStatus();
+  const installed = integrations?.playwright.installed ?? false;
+
+  useEffect(() => {
+    getPlatform().then((p) => setPlatformKind(p.kind));
+  }, []);
+
+  const copyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(PLAYWRIGHT_INSTALL_COMMAND);
+      toast({ title: "Copied", variant: "success" });
+    } catch {
+      toast({ title: "Couldn't copy — select and copy the command manually.", variant: "destructive" });
+    }
+  };
+
+  const runForMe = async () => {
+    setRunning(true);
+    setResult(null);
+    try {
+      const platform = await getPlatform();
+      const outcome = await platform.runPlaywrightInstall();
+      setResult(outcome);
+      if (outcome.success) {
+        toast({ title: "Chromium installed", variant: "success" });
+        queryClient.invalidateQueries({ queryKey: ["integrations-status"] });
+      }
+    } catch (error) {
+      setResult({ success: false, output: error instanceof Error ? error.message : "Unknown error." });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-dashed border-border/70 p-2.5">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <Terminal className="h-3.5 w-3.5" /> Playwright's browser
+        {installed ? (
+          <Badge variant="success" className="gap-1">
+            <CheckCircle2 className="h-3 w-3" /> Installed
+          </Badge>
+        ) : (
+          <Badge variant="warning">Not installed</Badge>
+        )}
+        <span className="flex-1" />
+        {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+      </button>
+      {expanded && (
+        <div className="mt-2.5 grid gap-2.5 text-xs text-muted-foreground">
+          <p>One-time setup for linking CLIPPING accounts.</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded-md bg-accent/60 px-2.5 py-1.5 font-mono text-[11px] text-foreground">
+              {PLAYWRIGHT_INSTALL_COMMAND}
+            </code>
+            <Button variant="outline" size="sm" onClick={copyCommand}>
+              <Copy className="h-3.5 w-3.5" /> Copy
+            </Button>
+            {platformKind === "desktop" && (
+              <Button variant="secondary" size="sm" disabled={running} onClick={runForMe}>
+                {running ? "Running…" : "Run for me"}
+              </Button>
+            )}
+          </div>
+          {result && (
+            <pre
+              className={cn(
+                "max-h-32 overflow-auto whitespace-pre-wrap rounded-md border p-2 font-mono text-[11px]",
+                result.success ? "border-success/40 bg-success/5 text-foreground" : "border-destructive/40 bg-destructive/5 text-destructive"
+              )}
+            >
+              {result.output || (result.success ? "Done." : "Failed.")}
+            </pre>
+          )}
         </div>
       )}
     </div>
@@ -212,7 +342,7 @@ function AdvancedSection() {
             <Button
               variant="outline"
               size="sm"
-              onClick={async () => (await getPlatform()).notify("Reel Manager", "Notifications are working.")}
+              onClick={async () => (await getPlatform()).notify("RIPPLELINK", "Notifications are working.")}
             >
               Test notification
             </Button>
@@ -230,15 +360,141 @@ function AdvancedSection() {
   );
 }
 
+// updateUser({password}) applies to whichever account the CURRENT session belongs to — no old
+// password required, since a signed-in session is already proof of identity. That's the same
+// call the "forgot password" email-link flow uses (see ResetPasswordPage.tsx); this is just a
+// second, more convenient entry point for someone who's already signed in and just wants to
+// change it, not reset it because they're locked out.
+function ChangePasswordModal() {
+  const { updatePassword } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const { toast } = useToast();
+
+  const reset = () => {
+    setPassword("");
+    setConfirm("");
+    setError(null);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (password !== confirm) {
+      setError("Passwords don't match.");
+      return;
+    }
+    setSubmitting(true);
+    const result = await updatePassword(password);
+    setSubmitting(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    setOpen(false);
+    reset();
+    toast({ title: "Password updated", variant: "success" });
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) reset();
+      }}
+    >
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        Change password
+      </Button>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Change password</DialogTitle>
+          <DialogDescription>Set a new password for your account.</DialogDescription>
+        </DialogHeader>
+        <form className="grid gap-3" onSubmit={handleSubmit}>
+          <div className="grid gap-1.5">
+            <Label htmlFor="change-password-new">New password</Label>
+            <Input
+              id="change-password-new"
+              type="password"
+              autoComplete="new-password"
+              autoFocus
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="change-password-confirm">Confirm password</Label>
+            <Input
+              id="change-password-confirm"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={6}
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "…" : "Update password"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function SettingsPage() {
   const { data: clippingAccounts } = useClippingAccounts();
   const defaultCampaignId = useDefaultClippingCampaignId();
   const [campaignIdDraft, setCampaignIdDraft] = useState(defaultCampaignId.value);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const { toast } = useToast();
+  const { session, signOut } = useAuth();
+
+  useEffect(() => {
+    // Only the desktop app has a real, discrete version number — a browser tab is
+    // continuously deployed and has no equivalent concept, so this stays null there and the
+    // badge below just doesn't render.
+    getPlatform().then((platform) => {
+      if (platform.kind !== "desktop") return;
+      platform.getAppVersion().then(setAppVersion);
+    });
+  }, []);
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+        {appVersion && <Badge variant="outline" className="text-muted-foreground">v{appVersion}</Badge>}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Account</CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-3">
+          <span className="text-sm text-muted-foreground">{session?.user.email}</span>
+          <div className="flex shrink-0 items-center gap-2">
+            <ChangePasswordModal />
+            <Button variant="outline" size="sm" onClick={() => signOut()}>
+              Sign out
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-4 space-y-0">
@@ -246,6 +502,7 @@ export function SettingsPage() {
           <AddClippingAccountModal />
         </CardHeader>
         <CardContent className="grid gap-2">
+          <PlaywrightSetupNotice />
           {!clippingAccounts?.items.length ? (
             <p className="text-sm text-muted-foreground">No CLIPPING accounts added yet.</p>
           ) : (

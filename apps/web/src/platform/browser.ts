@@ -26,4 +26,21 @@ export const browserPlatform: Platform = {
   async getAppVersion() {
     return import.meta.env.VITE_APP_VERSION ?? "web";
   },
+
+  async runPlaywrightInstall() {
+    // Nothing to spawn from a browser tab — callers should check platform.kind === "desktop"
+    // before showing a "Run for me" button at all, and fall back to the copyable command.
+    throw new Error("Not available in the browser — copy the command and run it in a terminal instead.");
+  },
+
+  async checkForUpdate() {
+    // The web app updates itself on every page load — there's no separate "check" step, and
+    // never anything to report here. Callers should skip the update banner entirely when
+    // platform.kind !== "desktop" rather than rely on this always resolving to unavailable.
+    return { available: false, version: null, notes: null };
+  },
+
+  async installUpdateAndRelaunch() {
+    throw new Error("Not available in the browser.");
+  },
 };

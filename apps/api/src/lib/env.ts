@@ -12,7 +12,14 @@ function optional(name: string): string | undefined {
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: Number(process.env.PORT ?? 4000),
-  corsOrigin: optional("CORS_ORIGIN") ?? "http://localhost:5173",
+  // Comma-separated so both the web dev/prod origin and the Tauri webview's origin (a
+  // different scheme entirely — e.g. tauri://localhost) can be allow-listed at once.
+  corsOrigins: (optional("CORS_ORIGIN") ?? "http://localhost:5173").split(",").map((o) => o.trim()),
+
+  // Used to verify Supabase access tokens via its public JWKS endpoint (see lib/auth.ts) —
+  // not a secret itself (same value as the frontend's VITE_SUPABASE_URL), just not bundled
+  // into the client here since the backend has no other use for VITE_-prefixed config.
+  supabaseUrl: optional("SUPABASE_URL"),
 
   clipping: {
     apiUrl: optional("CLIPPING_API_URL"),

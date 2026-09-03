@@ -89,7 +89,7 @@ export class CreatorDetectionService {
     return extractIdentifierViaOcr(thumbnailUrl);
   }
 
-  async resolveForReel(thumbnailUrl: string): Promise<DetectionResult> {
+  async resolveForReel(userId: string, thumbnailUrl: string): Promise<DetectionResult> {
     let identifier: string | null;
     try {
       identifier = await this.detectIdentifier(thumbnailUrl);
@@ -106,10 +106,11 @@ export class CreatorDetectionService {
     // read of the same person creates (or re-attaches to) a separate, wrong Creator record
     // instead of converging on the one real name, even though the bounty tag shown elsewhere
     // already gets this same correction.
-    identifier = await bountyMatchingService.resolveBountyTag(identifier);
+    identifier = await bountyMatchingService.resolveBountyTag(userId, identifier);
 
     const creator = await prisma.creator.findFirst({
       where: {
+        userId,
         OR: [{ detectedIdentifier: identifier }, { aliases: { some: { detectedIdentifier: identifier } } }],
       },
     });
@@ -122,8 +123,8 @@ export class CreatorDetectionService {
     // Creator immediately. `upsert` (not `create`) guards against two Reels detecting the
     // same new identifier concurrently and racing each other into a unique-constraint error.
     const newCreator = await prisma.creator.upsert({
-      where: { detectedIdentifier: identifier },
-      create: { detectedIdentifier: identifier, displayName: identifier },
+      where: { userId_detectedIdentifier: { userId, detectedIdentifier: identifier } },
+      create: { userId, detectedIdentifier: identifier, displayName: identifier },
       update: {},
     });
     return { status: "mapped", detectedIdentifier: identifier, creatorId: newCreator.id };

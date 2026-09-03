@@ -38,11 +38,11 @@ export class BountyMatchingService {
    * bounties are never matched against, so a Reel never gets silently filed under a tag
    * CLIPPING isn't accepting submissions for anymore.
    */
-  async resolveBountyTag(candidate: string): Promise<string> {
+  async resolveBountyTag(userId: string, candidate: string): Promise<string> {
     const trimmed = candidate.trim();
     if (!trimmed) return trimmed;
 
-    const bounties = await prisma.clippingBounty.findMany({ where: { active: true } });
+    const bounties = await prisma.clippingBounty.findMany({ where: { active: true, userId } });
     if (bounties.length === 0) return trimmed;
 
     const lower = trimmed.toLowerCase();

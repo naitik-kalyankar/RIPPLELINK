@@ -67,6 +67,7 @@ export default {
       },
       keyframes: {
         "fade-in": { from: { opacity: "0" }, to: { opacity: "1" } },
+        "fade-out": { from: { opacity: "1" }, to: { opacity: "0" } },
         "slide-up": { from: { opacity: "0", transform: "translateY(4px)" }, to: { opacity: "1", transform: "translateY(0)" } },
         "slide-in-left": { from: { transform: "translateX(-100%)" }, to: { transform: "translateX(0)" } },
         // Dialog content is centered via a static `translate(-50%, -50%)` (see DialogContent).
@@ -78,6 +79,10 @@ export default {
           from: { opacity: "0", transform: "translate(-50%, -50%) translateY(8px) scale(0.98)" },
           to: { opacity: "1", transform: "translate(-50%, -50%) translateY(0) scale(1)" },
         },
+        "dialog-out": {
+          from: { opacity: "1", transform: "translate(-50%, -50%) translateY(0) scale(1)" },
+          to: { opacity: "0", transform: "translate(-50%, -50%) translateY(8px) scale(0.98)" },
+        },
         // Sweeps a 40%-wide gradient across a full-width track: -100% puts its own trailing
         // edge at the track's start (fully hidden), 250% (2.5x its own width, which is 40% of
         // the track) puts its leading edge past the track's end (fully hidden the other side).
@@ -88,9 +93,11 @@ export default {
       },
       animation: {
         "fade-in": "fade-in 150ms ease-out",
+        "fade-out": "fade-out 150ms ease-in",
         "slide-up": "slide-up 200ms ease-out",
         "slide-in-left": "slide-in-left 220ms ease-out",
         "dialog-in": "dialog-in 200ms ease-out",
+        "dialog-out": "dialog-out 150ms ease-in",
         "progress-shine": "progress-shine 1.2s ease-in-out infinite",
       },
     },

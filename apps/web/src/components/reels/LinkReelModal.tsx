@@ -55,6 +55,15 @@ export function LinkReelModal({ reel, onOpenChange }: LinkReelModalProps) {
   const isDisabledBounty = Boolean(trimmedBountyTag) && matchedBounty !== undefined && !matchedBounty.active;
   const isUnknownBounty = Boolean(trimmedBountyTag) && bountyListLoaded && matchedBounty === undefined;
 
+  // The original detected name is about to disappear from the Bounty field the moment this
+  // switches it to "other" — carry it into Notes so CLIPPING's reviewer (or a future re-read of
+  // this submission) still knows who it was actually detected as, instead of just "other" with
+  // no context. Doesn't clobber notes the user already typed by hand.
+  const useOtherBounty = () => {
+    setNotes((current) => (current.trim() ? current : trimmedBountyTag));
+    setBountyTag(OTHER_BOUNTY_TAG);
+  };
+
   const handleDetect = () => {
     detectCreator.mutate(reel.id, {
       onSuccess: ({ reel: updated, suggestedBountyTag }) => {
@@ -181,7 +190,7 @@ export function LinkReelModal({ reel, onOpenChange }: LinkReelModalProps) {
                     variant="outline"
                     size="sm"
                     className="h-6 shrink-0 px-2 text-xs"
-                    onClick={() => setBountyTag(OTHER_BOUNTY_TAG)}
+                    onClick={useOtherBounty}
                   >
                     Use "other"
                   </Button>
@@ -194,7 +203,7 @@ export function LinkReelModal({ reel, onOpenChange }: LinkReelModalProps) {
                     variant="outline"
                     size="sm"
                     className="h-6 shrink-0 px-2 text-xs"
-                    onClick={() => setBountyTag(OTHER_BOUNTY_TAG)}
+                    onClick={useOtherBounty}
                   >
                     Use "other"
                   </Button>

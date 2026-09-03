@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { DashboardStats } from "@kick-manager/shared";
 import { prisma } from "../lib/db.js";
 import { activityLogService } from "../services/activity/ActivityLogService.js";
+import { getCachedCampaignInfo } from "../lib/campaignInfoCache.js";
 
 // Bounty rates are scraped from CLIPPING's campaign page as free text like "$5/100K" (see
 // tools/clipping-cookie-sync-extension/content.js) — not a structured number, so this is the
@@ -31,16 +32,31 @@ interface PayoutResult {
   qualifyingViews: number;
 }
 
-async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSource: ViewsSource = "live"): Promise<PayoutResult> {
+async function computeEstimatedPayout(
+  userId: string,
+  instagramAccountIds?: string[],
+  viewsSource: ViewsSource = "live"
+): Promise<PayoutResult> {
+  // "Live" mode is a running local estimate with no concept of CLIPPING's payout cycles on its
+  // own — once a cycle closes, CLIPPING stops tracking clips posted before the new cycle's
+  // videoStartDate (shown on clipping.net as "NOT TRACKING") and starts a fresh accrual window.
+  // Without this cutoff, "live" mode kept summing every qualifying Reel ever, silently drifting
+  // further from CLIPPING's own number every time a cycle rolled over. "clipping" mode doesn't
+  // need this — CLIPPING's own view counts already reflect this on their end.
+  const videoStartDate = viewsSource === "live" ? (await getCachedCampaignInfo(userId))?.videoStartDate : null;
+
   const [submissions, bounties] = await Promise.all([
     prisma.clippingSubmission.findMany({
-      select: { views: true, bountyTag: true, reel: { select: { views: true } } },
+      select: { views: true, bountyTag: true, reel: { select: { views: true, publishedAt: true } } },
       // A submission with no linked Reel yet can't be attributed to any account, so it's
       // correctly excluded once scoped — the reel relation is the only link between a
       // submission and an Instagram account (campaignId is a loose, account-agnostic string).
-      ...(instagramAccountIds ? { where: { reel: { instagramAccountId: { in: instagramAccountIds } } } } : {}),
+      where: {
+        userId,
+        ...(instagramAccountIds ? { reel: { instagramAccountId: { in: instagramAccountIds } } } : {}),
+      },
     }),
-    prisma.clippingBounty.findMany({ select: { name: true, rate: true } }),
+    prisma.clippingBounty.findMany({ where: { userId }, select: { name: true, rate: true } }),
   ]);
 
   const ratePer100kByBounty = new Map(
@@ -58,6 +74,10 @@ async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSourc
     // truth CLIPPING pays against) — the threshold only applies to live Instagram views,
     // which can include reels that haven't cleared CLIPPING's own minimum yet.
     if (viewsSource === "live" && views < MIN_QUALIFYING_VIEWS) continue;
+    // A Reel with no publishedAt yet (still syncing) is kept rather than excluded — there's no
+    // date to compare, and excluding it would just make a freshly-synced Reel disappear from
+    // the estimate for a beat until its publish date backfills.
+    if (videoStartDate && submission.reel?.publishedAt && submission.reel.publishedAt < new Date(videoStartDate)) continue;
     const ratePer100k = ratePer100kByBounty.get(submission.bountyTag.toLowerCase());
     if (ratePer100k == null) continue;
     total += (views / 100_000) * ratePer100k;
@@ -75,11 +95,22 @@ async function computeEstimatedPayout(instagramAccountIds?: string[], viewsSourc
  * this app can't faithfully replicate locally (that's what computeEstimatedPayout above was
  * trying, and why it drifted from CLIPPING's real figure).
  */
-async function computeClippingModePayout(instagramAccountIds?: string[]): Promise<PayoutResult> {
+async function computeClippingModePayout(
+  userId: string,
+  instagramAccountIds?: string[],
+  clippingAccountId?: string | null
+): Promise<PayoutResult> {
   let clippingAccountIds: string[] | undefined;
-  if (instagramAccountIds) {
+  if (clippingAccountId) {
+    // A ClippingAccount's own payout is a property of ITSELF, not of whichever Instagram
+    // accounts happen to be linked to it — a brand new account can have real pending payout
+    // (synced straight from CLIPPING's campaign page) before any Instagram account is ever
+    // linked to it. Scoping by the selected ClippingAccount directly (when the caller knows
+    // it) avoids the derive-through-Instagram path below going empty for exactly that case.
+    clippingAccountIds = [clippingAccountId];
+  } else if (instagramAccountIds) {
     const refs = await prisma.instagramAccount.findMany({
-      where: { id: { in: instagramAccountIds } },
+      where: { userId, id: { in: instagramAccountIds } },
       select: { clippingAccountRefId: true },
     });
     clippingAccountIds = Array.from(
@@ -88,7 +119,7 @@ async function computeClippingModePayout(instagramAccountIds?: string[]): Promis
   }
 
   const accounts = await prisma.clippingAccount.findMany({
-    where: { active: true, ...(clippingAccountIds ? { id: { in: clippingAccountIds } } : {}) },
+    where: { active: true, userId, ...(clippingAccountIds ? { id: { in: clippingAccountIds } } : {}) },
     select: { lastPayout: true, lastPayoutBountyBreakdown: true },
   });
 
@@ -108,25 +139,34 @@ async function computeClippingModePayout(instagramAccountIds?: string[]): Promis
 
 export async function dashboardRoutes(app: FastifyInstance) {
   app.get("/api/dashboard/stats", async (request): Promise<DashboardStats> => {
-    const { instagramAccountIds: raw, viewsSource } = request.query as {
+    const userId = request.user.id;
+    const { instagramAccountIds: raw, viewsSource, clippingAccountId } = request.query as {
       instagramAccountIds?: string;
       viewsSource?: string;
+      clippingAccountId?: string;
     };
-    const ids = raw ? raw.split(",").filter(Boolean) : undefined;
-    const accountFilter = ids ? { instagramAccountId: { in: ids } } : {};
+    // `raw` distinguishes "no scope requested" (undefined — the param was never sent) from "a
+    // real scope with zero accounts in it" (present but ""). Collapsing both to `undefined` via
+    // `raw ? ... : undefined` used to silently fall back to UNSCOPED (all of the user's data)
+    // whenever the selected account happened to have zero linked Instagram accounts — the exact
+    // scenario a brand new account is in right after connecting.
+    const ids = raw !== undefined ? raw.split(",").filter(Boolean) : undefined;
+    const accountFilter = { userId, ...(ids ? { instagramAccountId: { in: ids } } : {}) };
     const resolvedViewsSource: ViewsSource = viewsSource === "clipping" ? "clipping" : "live";
 
     const [totalReels, linked, creators, instagramAccounts, failedSubmissions, payout] = await Promise.all([
       prisma.reel.count({ where: accountFilter }),
       prisma.reel.count({ where: { ...accountFilter, clippingSubmission: { isNot: null } } }),
       ids
-        ? prisma.creator.count({ where: { reels: { some: { instagramAccountId: { in: ids } } } } })
-        : prisma.creator.count(),
-      ids ? ids.length : prisma.instagramAccount.count(),
+        ? prisma.creator.count({ where: { userId, reels: { some: { instagramAccountId: { in: ids } } } } })
+        : prisma.creator.count({ where: { userId } }),
+      ids ? ids.length : prisma.instagramAccount.count({ where: { userId } }),
       prisma.reel.count({
         where: { ...accountFilter, clippingSubmission: { is: null }, submissionAttempts: { some: { status: "failed" } } },
       }),
-      resolvedViewsSource === "live" ? computeEstimatedPayout(ids, "live") : computeClippingModePayout(ids),
+      resolvedViewsSource === "live"
+        ? computeEstimatedPayout(userId, ids, "live")
+        : computeClippingModePayout(userId, ids, clippingAccountId),
     ]);
 
     return {
@@ -141,8 +181,8 @@ export async function dashboardRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/api/activity", async () => {
-    const items = await activityLogService.recent(50);
+  app.get("/api/activity", async (request) => {
+    const items = await activityLogService.recent(request.user.id, 50);
     return { items };
   });
 }

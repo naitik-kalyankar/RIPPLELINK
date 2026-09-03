@@ -2,13 +2,14 @@ import type { SyncResult } from "@kick-manager/shared";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/db.js";
 import { getInstagramServiceForAccount } from "../instagram/index.js";
-import { clippingService, getClippingProviderForAccount } from "../clipping/index.js";
+import { getClippingProviderForAccount } from "../clipping/index.js";
 import type { ClippingSubmissionRaw } from "../clipping/ClippingService.js";
 import { clippingBrowserManager } from "../clipping/ClippingBrowserManager.js";
 import type { ClippingAccount } from "@prisma/client";
 import { creatorDetectionService } from "../creators/CreatorDetectionService.js";
 import { activityLogService } from "../activity/ActivityLogService.js";
 import { reelMatchingService } from "../reels/ReelMatchingService.js";
+import { upsertBounties } from "../../lib/bountySync.js";
 
 export interface AccountSyncResult {
   fetched: number;
@@ -24,8 +25,10 @@ export interface SyncableAccount {
 }
 
 export class SyncService {
-  /** Fetches + upserts Reels for a single account, running creator detection on new rows. */
-  async syncAccount(account: SyncableAccount): Promise<AccountSyncResult> {
+  /** Fetches + upserts Reels for a single account, running creator detection on new rows.
+   * `userId` must be the account's OWN owner — callers are responsible for that check (route
+   * handlers verify it via the account lookup itself being scoped by userId). */
+  async syncAccount(userId: string, account: SyncableAccount): Promise<AccountSyncResult> {
     const accountRef = {
       id: account.id,
       instagramId: account.instagramId,
@@ -55,11 +58,12 @@ export class SyncService {
         continue;
       }
 
-      const detection = await creatorDetectionService.resolveForReel(raw.thumbnailUrl);
+      const detection = await creatorDetectionService.resolveForReel(userId, raw.thumbnailUrl);
 
       try {
         await prisma.reel.create({
           data: {
+            userId,
             instagramAccountId: account.id,
             instagramReelId: raw.instagramReelId,
             instagramUrl: raw.instagramUrl,
@@ -89,13 +93,15 @@ export class SyncService {
       where: { id: account.id },
       data: { lastSyncedAt: new Date() },
     });
-    await activityLogService.log(`Fetched ${reels.length} Reels from @${account.username}.`);
+    await activityLogService.log(userId, `Fetched ${reels.length} Reels from @${account.username}.`);
 
     return { fetched: reels.length, upserted, detected };
   }
 
-  async syncInstagram(): Promise<Pick<SyncResult, "instagramReelsFetched" | "instagramReelsUpserted" | "creatorsDetected" | "errors">> {
-    const accounts = await prisma.instagramAccount.findMany({ where: { active: true } });
+  async syncInstagram(
+    userId: string
+  ): Promise<Pick<SyncResult, "instagramReelsFetched" | "instagramReelsUpserted" | "creatorsDetected" | "errors">> {
+    const accounts = await prisma.instagramAccount.findMany({ where: { active: true, userId } });
     let fetched = 0;
     let upserted = 0;
     let detected = 0;
@@ -103,42 +109,28 @@ export class SyncService {
 
     for (const account of accounts) {
       try {
-        const result = await this.syncAccount(account);
+        const result = await this.syncAccount(userId, account);
         fetched += result.fetched;
         upserted += result.upserted;
         detected += result.detected;
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown Instagram sync error.";
         errors.push(`@${account.username}: ${message}`);
-        await activityLogService.log(`Instagram sync failed for @${account.username}: ${message}`, "error");
+        await activityLogService.log(userId, `Instagram sync failed for @${account.username}: ${message}`, "error");
       }
     }
 
     return { instagramReelsFetched: fetched, instagramReelsUpserted: upserted, creatorsDetected: detected, errors };
   }
 
-  /** Zero ClippingAccount rows (fresh/legacy install): one call against the legacy global
-   * provider, byte-for-byte today's behavior — including letting a throw here propagate to
-   * syncClipping's outer try/catch exactly as before.
-   *
-   * With rows present: the legacy session KEEPS being fetched alongside them, not replaced —
-   * any Instagram account not yet linked to a ClippingAccount (see ClippingAccountResolver)
-   * still relies on the legacy session for its submissions, so its clips must keep showing up
-   * here too. Each source (legacy + every account) is fetched independently so one failing
-   * source doesn't block the others, mirroring syncInstagram()'s per-account pattern. */
-  private async fetchAllClips(errors: string[], payoutErrors: string[]): Promise<ClippingSubmissionRaw[]> {
-    const accounts = await prisma.clippingAccount.findMany({ where: { active: true } });
-    if (accounts.length === 0) return clippingService.getUploadedClips();
-
+  /** Every user now goes through a real ClippingAccount row (Playwright-backed, per-account
+   * session — see ClippingAccountGate, which blocks the rest of the app until at least one
+   * exists). The old extension-cookie-driven global singleton (CLIPPING_SESSION_COOKIE) is
+   * never fetched here anymore — it's not tied to any real logged-in session, so it only ever
+   * produced a stale "session expired" error on every sync tick. */
+  private async fetchAllClips(userId: string, errors: string[], payoutErrors: string[]): Promise<ClippingSubmissionRaw[]> {
+    const accounts = await prisma.clippingAccount.findMany({ where: { active: true, userId } });
     const collected: ClippingSubmissionRaw[] = [];
-
-    try {
-      collected.push(...(await clippingService.getUploadedClips()));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown CLIPPING sync error.";
-      errors.push(`Legacy session: ${message}`);
-      await activityLogService.log(`CLIPPING sync failed for the legacy session: ${message}`, "error");
-    }
 
     for (const account of accounts) {
       try {
@@ -148,7 +140,7 @@ export class SyncService {
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown CLIPPING sync error.";
         errors.push(`${account.label}: ${message}`);
-        await activityLogService.log(`CLIPPING sync failed for ${account.label}: ${message}`, "error");
+        await activityLogService.log(userId, `CLIPPING sync failed for ${account.label}: ${message}`, "error");
       }
 
       // Separate error list on purpose: a payout-scrape failure (a different Playwright page
@@ -156,7 +148,7 @@ export class SyncService {
       // stale-submission cleanup below, which only cares about clip-fetch completeness — those
       // are unrelated concerns, so coupling them would make a flaky payout scrape silently
       // stop real cleanup from ever running.
-      await this.syncPayoutForAccount(account, payoutErrors);
+      await this.syncPayoutForAccount(userId, account, payoutErrors);
     }
     return collected;
   }
@@ -165,9 +157,19 @@ export class SyncService {
    * campaign page — see ClippingBrowserManager.getCampaignPageData. This is what makes the
    * dashboard's "CLIPPING" payout mode match clipping.net exactly instead of a local estimate
    * that doesn't replicate CLIPPING's per-bounty-aggregate view floor. */
-  private async syncPayoutForAccount(account: ClippingAccount, errors: string[]): Promise<void> {
+  private async syncPayoutForAccount(userId: string, account: ClippingAccount, errors: string[]): Promise<void> {
     try {
-      const { clipperStats } = await clippingBrowserManager.getCampaignPageData(account);
+      const { clipperStats, campaign } = await clippingBrowserManager.getCampaignPageData(account);
+      // The live, authoritative source now — previously this only ever got refreshed by
+      // manually running a separate browser extension (see routes/clipping.ts's POST handler,
+      // kept as a fallback). A name this app detects locally that isn't in this list is exactly
+      // what "not in CLIPPING's bounty list" means to the Link-Reel flow.
+      if (campaign?.bounties) {
+        await upsertBounties(userId, campaign.bounties).catch(async (error) => {
+          const message = error instanceof Error ? error.message : "Unknown error.";
+          await activityLogService.log(userId, `Bounty list sync failed for ${account.label}: ${message}`, "error");
+        });
+      }
       if (!clipperStats) return; // no session yet, or the page didn't render clipperStats — leave cached value as-is
       await prisma.clippingAccount.update({
         where: { id: account.id },
@@ -180,11 +182,27 @@ export class SyncService {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error.";
       errors.push(`${account.label} (payout): ${message}`);
-      await activityLogService.log(`CLIPPING payout sync failed for ${account.label}: ${message}`, "error");
+      await activityLogService.log(userId, `CLIPPING payout sync failed for ${account.label}: ${message}`, "error");
+    }
+
+    // Backfills a missing avatar (accounts connected before this existed, or whose scrape came
+    // up empty at login time) — only when it's actually missing, so this never adds an extra
+    // navigation to every sync for accounts that already have one.
+    if (!account.avatarUrl) {
+      try {
+        const { avatarUrl } = await clippingBrowserManager.getDecodedIdentity(account);
+        if (avatarUrl) {
+          await prisma.clippingAccount.update({ where: { id: account.id }, data: { avatarUrl } });
+        }
+      } catch {
+        // No session yet, or the scrape came up empty again — leave it for the next sync to retry.
+      }
     }
   }
 
-  async syncClipping(): Promise<
+  async syncClipping(
+    userId: string
+  ): Promise<
     Pick<SyncResult, "clippingSubmissionsFetched" | "clippingSubmissionsUpserted" | "newlyLinked" | "newlyUnlinked" | "errors">
   > {
     const errors: string[] = [];
@@ -194,11 +212,11 @@ export class SyncService {
     let removedStale = 0;
 
     try {
-      const clips = await this.fetchAllClips(errors, payoutErrors);
+      const clips = await this.fetchAllClips(userId, errors, payoutErrors);
       fetched = clips.length;
 
       for (const clip of clips) {
-        const matchingReel = await prisma.reel.findFirst({ where: { instagramReelId: clip.videoId } });
+        const matchingReel = await prisma.reel.findFirst({ where: { instagramReelId: clip.videoId, userId } });
 
         // clipping_submissions.reelId is unique (one submission per Reel). If this Reel is
         // already claimed by a *different* clip, don't attach reelId to this one too — store
@@ -216,6 +234,7 @@ export class SyncService {
         await prisma.clippingSubmission.upsert({
           where: { clippingClipId: clip.clippingClipId },
           create: {
+            userId,
             clippingClipId: clip.clippingClipId,
             videoId: clip.videoId,
             reelId,
@@ -258,7 +277,7 @@ export class SyncService {
         errors.length > 0
           ? []
           : await prisma.clippingSubmission.findMany({
-              where: { clippingClipId: { notIn: Array.from(fetchedClipIds) } },
+              where: { userId, clippingClipId: { notIn: Array.from(fetchedClipIds) } },
             });
       if (staleSubmissions.length > 0) {
         await prisma.clippingSubmission.deleteMany({
@@ -266,20 +285,21 @@ export class SyncService {
         });
         removedStale = staleSubmissions.length;
         await activityLogService.log(
+          userId,
           `Removed ${removedStale} CLIPPING submission(s) no longer present remotely — matching Reel(s) reverted to Unlinked.`
         );
       }
 
-      await activityLogService.log(`CLIPPING sync found ${clips.length} clips.`);
+      await activityLogService.log(userId, `CLIPPING sync found ${clips.length} clips.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown CLIPPING sync error.";
       errors.push(message);
-      await activityLogService.log(`CLIPPING sync failed: ${message}`, "error");
+      await activityLogService.log(userId, `CLIPPING sync failed: ${message}`, "error");
     }
 
-    const newlyLinked = await reelMatchingService.reconcileUnlinkedSubmissions();
+    const newlyLinked = await reelMatchingService.reconcileUnlinkedSubmissions(userId);
     if (newlyLinked > 0) {
-      await activityLogService.log(`Reconciliation linked ${newlyLinked} previously-unlinked Reel(s).`);
+      await activityLogService.log(userId, `Reconciliation linked ${newlyLinked} previously-unlinked Reel(s).`);
     }
 
     return {
@@ -291,9 +311,9 @@ export class SyncService {
     };
   }
 
-  async syncAll(): Promise<SyncResult> {
-    const instagramResult = await this.syncInstagram();
-    const clippingResult = await this.syncClipping();
+  async syncAll(userId: string): Promise<SyncResult> {
+    const instagramResult = await this.syncInstagram(userId);
+    const clippingResult = await this.syncClipping(userId);
     return {
       instagramReelsFetched: instagramResult.instagramReelsFetched,
       instagramReelsUpserted: instagramResult.instagramReelsUpserted,

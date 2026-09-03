@@ -28,8 +28,28 @@ enum ActivityLogLevel {
   error
 }
 
+// Mirrors auth.users 1:1 (Supabase Auth) — id IS the Supabase user id, not a separate cuid.
+// Populated automatically by a Postgres trigger on auth.users insert (see the RLS/auth
+// migration SQL), so app code never has to create this row itself. is_admin is never
+// settable by a user — only ever flipped by hand in the database by the app owner.
+model Profile {
+  id                 String    @id @db.Uuid
+  email              String
+  displayName        String?
+  isAdmin            Boolean   @default(false)
+  subscriptionTier   String?
+  subscriptionStatus String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@map("profiles")
+}
+
 model InstagramAccount {
   id          String  @id @default(cuid())
+  // Owning Supabase user — see Profile. Every query in routes/instagram.ts must be scoped by
+  // this; RLS on the table enforces it independently as defense-in-depth (see auth migration).
+  userId      String  @db.Uuid
   instagramId String  @unique
   username    String
   displayName String?
@@ -68,6 +88,7 @@ model InstagramAccount {
 
   reels Reel[]
 
+  @@index([userId])
   @@map("instagram_accounts")
 }
 
@@ -77,8 +98,13 @@ model InstagramAccount {
 // on disk (gitignored, same sensitivity as .env) — never serialized to the frontend.
 model ClippingAccount {
   id               String    @id @default(cuid())
+  userId           String    @db.Uuid
   label            String
   email            String?   @unique
+  // Straight off CLIPPING's own sidebar avatar (see ClippingBrowserManager.scrapeIdentityFromPage)
+  // — null when the account has no photo set there, in which case the app falls back to a
+  // name-initial avatar, same as CLIPPING itself does.
+  avatarUrl        String?
   apiUrl           String
   campaignId       String
   storageStatePath String
@@ -97,17 +123,49 @@ model ClippingAccount {
   lastPayoutBountyBreakdown Json?
   lastPayoutFetchedAt       DateTime?
 
+  // The full admin-payouts snapshot for this account (paidTotal, pendingTotal, paymentMethod,
+  // history — see routes/admin.ts's serializeAdminSnapshot) — kept around so a dead/unreachable
+  // session shows the last successfully known data instead of blanking to zero. Overwritten
+  // only when a fresh live fetch actually succeeds; never cleared by a failed one.
+  lastAdminPayoutSnapshot   Json?
+  lastAdminPayoutSnapshotAt DateTime?
+
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
   instagramAccounts InstagramAccount[]
+  payoutSplits      PayoutSplit[]
 
+  @@index([userId])
   @@map("clipping_accounts")
 }
 
+// How one ClippingAccount's real payout (from CLIPPING's own /api/clipper/earnings) is split
+// between named people — e.g. Riyaan's login might be 50% "Mine" / 50% "Alex", while Snipey's
+// is split differently. Purely a local bookkeeping label; CLIPPING itself has no concept of
+// this, it's never sent anywhere.
+model PayoutSplit {
+  id                String   @id @default(cuid())
+  userId            String   @db.Uuid
+  clippingAccountId String
+  name              String
+  percentage        Float
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  clippingAccount ClippingAccount @relation(fields: [clippingAccountId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([clippingAccountId])
+  @@map("payout_splits")
+}
+
+// Per-user creator catalog — detection results for the same real-world creator don't carry
+// across users (each user's Reels/OCR detections build up their own).
 model Creator {
   id                 String   @id @default(cuid())
-  detectedIdentifier String   @unique
+  userId             String   @db.Uuid
+  detectedIdentifier String
   displayName        String
   active             Boolean  @default(true)
   createdAt          DateTime @default(now())
@@ -116,22 +174,30 @@ model Creator {
   aliases CreatorAlias[]
   reels   Reel[]
 
+  @@unique([userId, detectedIdentifier])
+  @@index([userId])
   @@map("creators")
 }
 
 model CreatorAlias {
   id                 String   @id @default(cuid())
+  userId             String   @db.Uuid
   creatorId          String
-  detectedIdentifier String   @unique
+  detectedIdentifier String
   createdAt          DateTime @default(now())
 
   creator Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, detectedIdentifier])
+  @@index([userId])
   @@map("creator_aliases")
 }
 
 model Reel {
   id                     String                  @id @default(cuid())
+  // Denormalized from instagramAccount.userId at write time — Reel is the hottest-read table,
+  // so RLS/list queries check this flat column instead of joining through InstagramAccount.
+  userId                 String                  @db.Uuid
   instagramAccountId     String
   instagramReelId        String
   instagramUrl           String
@@ -150,29 +216,35 @@ model Reel {
   submissionAttempts SubmissionAttempt[]
 
   @@unique([instagramAccountId, instagramReelId])
+  @@index([userId])
   @@index([creatorDetectionStatus])
   @@index([publishedAt])
   @@map("reels")
 }
 
-// Real bounty tags/rates/active-state, learned by the browser extension scraping CLIPPING's
-// own campaign page (there's no API for this) — used to auto-correct OCR'd creator
-// identifiers to a real tag name before submitting (see BountyMatchingService), and to avoid
-// ever assigning a disabled bounty.
+// Real bounty tags/rates/active-state, learned by scraping CLIPPING's own campaign page —
+// per-user since each user's CLIPPING login is a separate scrape (rates could differ per
+// account/campaign even when the tag name matches another user's).
 model ClippingBounty {
   id         String   @id @default(cuid())
-  name       String   @unique
+  userId     String   @db.Uuid
+  name       String
   active     Boolean  @default(true)
   rate       String?
   lastSeenAt DateTime @default(now())
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  @@unique([userId, name])
+  @@index([userId])
   @@map("clipping_bounties")
 }
 
 model ClippingSubmission {
   id              String    @id @default(cuid())
+  // Denormalized from reel.userId at write time (see SubmissionService) — same flat-column
+  // reasoning as Reel.userId above.
+  userId          String    @db.Uuid
   reelId          String?   @unique
   clippingClipId  String    @unique
   videoId         String
@@ -192,12 +264,14 @@ model ClippingSubmission {
 
   reel Reel? @relation(fields: [reelId], references: [id])
 
+  @@index([userId])
   @@index([videoId])
   @@map("clipping_submissions")
 }
 
 model SubmissionAttempt {
   id           String                   @id @default(cuid())
+  userId       String                   @db.Uuid
   reelId       String
   status       SubmissionAttemptStatus
   errorMessage String?
@@ -205,16 +279,19 @@ model SubmissionAttempt {
 
   reel Reel @relation(fields: [reelId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@index([reelId])
   @@map("submission_attempts")
 }
 
 model ActivityLog {
   id        String           @id @default(cuid())
+  userId    String           @db.Uuid
   message   String
   level     ActivityLogLevel @default(info)
   createdAt DateTime         @default(now())
 
+  @@index([userId])
   @@index([createdAt])
   @@map("activity_logs")
 }

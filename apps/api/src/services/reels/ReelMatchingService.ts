@@ -92,15 +92,15 @@ export function serializeReel(reel: ReelWithRelations): Reel {
  * uploaded outside this app is automatically detected as Linked on the next sync.
  */
 export class ReelMatchingService {
-  async reconcileUnlinkedSubmissions(): Promise<number> {
+  async reconcileUnlinkedSubmissions(userId: string): Promise<number> {
     const orphanSubmissions = await prisma.clippingSubmission.findMany({
-      where: { reelId: null },
+      where: { reelId: null, userId },
     });
 
     let linked = 0;
     for (const submission of orphanSubmissions) {
       const reel = await prisma.reel.findFirst({
-        where: { instagramReelId: submission.videoId },
+        where: { instagramReelId: submission.videoId, userId },
       });
       if (!reel) continue;
 

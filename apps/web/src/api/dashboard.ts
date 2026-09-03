@@ -4,12 +4,23 @@ import { apiClient } from "@/lib/apiClient";
 
 export type ViewsSource = "live" | "clipping";
 
-export function useDashboardStats(instagramAccountIds?: string[] | null, viewsSource: ViewsSource = "live") {
+export function useDashboardStats(
+  instagramAccountIds?: string[] | null,
+  viewsSource: ViewsSource = "live",
+  clippingAccountId?: string | null
+) {
   return useQuery({
-    queryKey: ["dashboard", "stats", instagramAccountIds ?? "all", viewsSource],
+    queryKey: ["dashboard", "stats", instagramAccountIds ?? "all", viewsSource, clippingAccountId ?? null],
     queryFn: () => {
       const params = new URLSearchParams({ viewsSource });
+      // Sent even when instagramAccountIds is an empty array (a real "this account has zero
+      // linked Instagram accounts" scope, not "no scope") — see dashboard.ts's own comment on
+      // why the backend needs to tell that apart from the param being absent entirely.
       if (instagramAccountIds) params.set("instagramAccountIds", instagramAccountIds.join(","));
+      // The selected CLIPPING account's own payout doesn't depend on it having any Instagram
+      // accounts linked yet — passed directly so "clipping" mode can scope to it without
+      // going through the (possibly empty) instagramAccountIds derivation above.
+      if (clippingAccountId) params.set("clippingAccountId", clippingAccountId);
       return apiClient.get<DashboardStats>(`/api/dashboard/stats?${params.toString()}`);
     },
   });

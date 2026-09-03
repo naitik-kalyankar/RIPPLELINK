@@ -11,3 +11,6 @@ apps/desktop/src-tauri/target/
 apps/api/prisma/dev.db
 coverage/
 apps/api/.clipping-sessions/
+# Tauri updater signing key — losing/leaking the private key means future updates can never be
+# signed compatibly with what's already installed. Keep it out of git; back it up somewhere safe.
+apps/desktop/.tauri-keys/
