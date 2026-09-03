@@ -1,6 +1,10 @@
 import { supabase } from "@/lib/supabaseClient";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+// The fallback here (not just apps/web/.env, which is gitignored and so isn't present for the
+// GitHub Actions release build) is what the shared desktop build actually connects to — the API
+// only runs on Naitik's Mac, reachable over the LAN via its stable Bonjour/mDNS hostname rather
+// than a DHCP-assigned IP that can change. See the "other device can't reach the API" fix.
+const API_URL = import.meta.env.VITE_API_URL ?? "http://Naitiks-MacBook-Pro.local:4000";
 
 export class ApiError extends Error {
   constructor(
