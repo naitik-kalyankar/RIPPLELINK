@@ -1,0 +1,52 @@
+name: Release RIPPLELINK desktop
+
+# Triggered by pushing a version tag (e.g. `v0.2.0`) — see the "Publishing a release" section
+# in the repo README/CLAUDE.md for the exact steps. Builds the macOS desktop app, signs the
+# update artifacts with the key matching apps/desktop/src-tauri/tauri.conf.json's updater
+# pubkey, and publishes (or updates) a GitHub Release with the .app/.dmg bundle plus the
+# latest.json the in-app updater (UpdateBanner.tsx) polls for.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Must match apps/desktop/.tauri-keys/ripplelink.key (gitignored, kept only on the
+          # machine that generated it) — add these as repo secrets before the first release.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # apps/web/.env is gitignored (never committed), so the frontend bundled into this
+          # build needs these injected here instead — Vite picks up any VITE_-prefixed env var
+          # at build time even with no .env file present. Both are the public/anon-scoped
+          # Supabase values (see apps/web/.env's own comment) — safe as repo secrets, just not
+          # meant to be hardcoded into a committed file. VITE_API_URL isn't needed: every user
+          # runs their own apps/api locally, and apiClient.ts already defaults to
+          # http://localhost:4000 when it's unset.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "RIPPLELINK ${{ github.ref_name }}"
+          releaseDraft: false
+          prerelease: false
