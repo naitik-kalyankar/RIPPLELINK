@@ -89,6 +89,14 @@ export async function adminRoutes(app: FastifyInstance) {
 
         try {
           const payments = await computeAccountPayments(account);
+          // Mock is fabricated placeholder data (see computeAccountPayments — it exists so the
+          // OWNER's own Payout page has something to look at before real numbers exist), never a
+          // genuine result. Routing it through the same catch-and-fall-back-to-cached path below
+          // as a real failure would is what keeps this route's two guarantees actually true: real
+          // stored numbers never get overwritten by fake ones, and an admin never sees invented
+          // numbers dressed up as real — either the last known-good snapshot, or an honest "never
+          // fetched" empty state, but never mock.
+          if (payments.mock) throw new Error("No real payout data available yet.");
           const snapshot: AdminPayoutSnapshot = {
             pendingEstimate: payments.pendingEstimate?.total ?? null,
             paidTotal: payments.paidTotal,

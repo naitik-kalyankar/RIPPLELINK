@@ -32,6 +32,10 @@ async function refreshOne(account: ClippingAccount): Promise<void> {
 
   try {
     const payments = await computeAccountPayments(account);
+    // Mock is fabricated placeholder data (see computeAccountPayments), never a genuine result —
+    // skip the write entirely rather than let a background refresh silently overwrite real
+    // stored numbers with invented ones. Same reasoning as the admin route's own guard.
+    if (payments.mock) return;
     const snapshot: StoredSnapshot = {
       pendingEstimate: payments.pendingEstimate?.total ?? null,
       paidTotal: payments.paidTotal,
