@@ -42,11 +42,21 @@ fn spawn_api_sidecar(app: &tauri::AppHandle) {
         None => return,
     };
 
+    // A GUI-launched background process's cwd defaults to "/" on macOS (there's no shell to
+    // inherit a sensible one from) — apps/api's ClippingBrowserManager resolves its session
+    // storage relative to cwd, which meant every CLIPPING login failed trying to mkdir
+    // "/.clipping-sessions" (no permission). app_data_dir() is a real, writable, per-app
+    // location that exists specifically for this.
+    let data_dir = app.path().app_data_dir().ok();
+    if let Some(dir) = &data_dir {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
     let command = match app.shell().sidecar("api-node") {
         Ok(cmd) => cmd,
         Err(_) => return,
     };
-    let command = command
+    let mut command = command
         .args([server_path_str])
         .env("DATABASE_URL", API_DATABASE_URL)
         .env("SUPABASE_URL", API_SUPABASE_URL)
@@ -55,6 +65,9 @@ fn spawn_api_sidecar(app: &tauri::AppHandle) {
         .env("CLIPPING_API_URL", API_CLIPPING_API_URL)
         .env("CLIPPING_CAMPAIGN_ID", API_CLIPPING_CAMPAIGN_ID)
         .env("NODE_ENV", "production");
+    if let Some(dir) = data_dir.as_ref().and_then(|d| d.to_str()) {
+        command = command.env("RIPPLELINK_DATA_DIR", dir);
+    }
 
     if let Ok((_rx, child)) = command.spawn() {
         if let Some(state) = app.try_state::<ApiSidecar>() {

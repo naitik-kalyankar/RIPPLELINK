@@ -34,7 +34,13 @@ const CLIPPING_DOMAIN = "clipping.net";
 // possibly chunked across numbered parts (sb-<project-ref>-auth-token.0, .1, ...).
 const AUTH_COOKIE_PATTERN = /^sb-.*-auth-token(\.\d+)?$/;
 
-const SESSIONS_DIR = path.resolve(process.cwd(), ".clipping-sessions");
+// RIPPLELINK_DATA_DIR (set by the desktop app's Rust shell when it spawns this as a sidecar —
+// see apps/desktop/src-tauri/src/main.rs) beats process.cwd() as the base: a GUI-launched
+// background process's cwd defaults to "/" on macOS, not this project's directory, which made
+// this resolve to the unwritable "/.clipping-sessions" and fail every CLIPPING login with
+// ENOENT. Falls back to cwd for plain `npm run dev`/`node dist/server.js`, where cwd is
+// meaningful and stable.
+const SESSIONS_DIR = path.resolve(process.env.RIPPLELINK_DATA_DIR ?? process.cwd(), ".clipping-sessions");
 
 // Same trick the extension's background.js uses client-side (decodeIdentityFromCookieHeader):
 // the CLIPPING login's email lives in the Supabase access token's JWT payload, readable
