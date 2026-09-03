@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The bundled Node sidecar (see main.rs / binaries/api-node) needs to JIT-compile like any
+       Node process — macOS's hardened runtime blocks that kind of executable memory mapping for
+       a signed binary by default, which is what "Fatal process OOM in Failed to reserve virtual
+       memory for CodeRange" actually is (a misleading error for a permissions problem, not a
+       real memory shortage). -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- Prisma's native query engine (.node addon) has its own code signature, distinct from this
+       ad-hoc-signed process — without this, macOS's library validation refuses to dlopen it
+       ("different Team IDs"), even though both are legitimately part of the same app bundle. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

@@ -28,6 +28,51 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # RIPPLELINK bundles its own backend (apps/api) as a sidecar so a non-technical user never
+      # needs Node/a terminal — see apps/desktop/src-tauri/src/main.rs. These artifacts are built
+      # fresh here rather than committed to git (a self-contained Node binary + native deps like
+      # Prisma's query engine and sharp's binary would add ~250MB to every commit for no reason).
+      - name: Build the bundled API sidecar
+        env:
+          DATABASE_URL: "postgresql://placeholder/placeholder"
+        run: |
+          set -e
+          npx prisma generate --schema=apps/api/prisma/schema.prisma
+
+          mkdir -p apps/desktop/src-tauri/resources/api
+          npx esbuild apps/api/src/server.ts \
+            --bundle --platform=node --format=cjs --target=node20 \
+            --outfile=apps/desktop/src-tauri/resources/api/server.cjs \
+            --external:@prisma/client --external:.prisma/client \
+            --external:playwright --external:sharp --external:tesseract.js
+
+          mkdir -p /tmp/api-deps && cd /tmp/api-deps
+          cat > package.json <<'EOF'
+          {
+            "name": "ripplelink-api-runtime",
+            "private": true,
+            "dependencies": {
+              "@prisma/client": "5.22.0",
+              "playwright": "^1.62.1",
+              "sharp": "^0.35.3",
+              "tesseract.js": "^5.1.1"
+            }
+          }
+          EOF
+          npm install --omit=dev
+          find node_modules -name ".bin" -type d -exec rm -rf {} + 2>/dev/null || true
+          cd -
+          cp -R /tmp/api-deps/node_modules apps/desktop/src-tauri/resources/api/node_modules
+          rm -rf apps/desktop/src-tauri/resources/api/node_modules/.prisma apps/desktop/src-tauri/resources/api/node_modules/@prisma
+          cp -RL node_modules/.prisma apps/desktop/src-tauri/resources/api/node_modules/.prisma
+          cp -RL node_modules/@prisma apps/desktop/src-tauri/resources/api/node_modules/@prisma
+
+          mkdir -p apps/desktop/src-tauri/binaries
+          curl -sL -o /tmp/node.tar.gz https://nodejs.org/dist/latest-v20.x/node-v20.20.2-darwin-arm64.tar.gz
+          tar -xzf /tmp/node.tar.gz -C /tmp
+          cp /tmp/node-v20.20.2-darwin-arm64/bin/node apps/desktop/src-tauri/binaries/api-node-aarch64-apple-darwin
+          chmod +x apps/desktop/src-tauri/binaries/api-node-aarch64-apple-darwin
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,6 +89,9 @@ jobs:
           # http://localhost:4000 when it's unset.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Baked into the compiled sidecar-spawning binary via env!() (see main.rs) — never
+          # written to any file in this repo. Restricted `app_client` DB role, not the superuser.
+          RIPPLELINK_DATABASE_URL: ${{ secrets.RIPPLELINK_DATABASE_URL }}
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}

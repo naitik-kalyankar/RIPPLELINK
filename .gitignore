@@ -14,3 +14,7 @@ apps/api/.clipping-sessions/
 # Tauri updater signing key — losing/leaking the private key means future updates can never be
 # signed compatibly with what's already installed. Keep it out of git; back it up somewhere safe.
 apps/desktop/.tauri-keys/
+# Bundled API sidecar (Node binary + built server + native deps) — rebuilt fresh in CI
+# (.github/workflows/release.yml) rather than committed; would add ~250MB per commit otherwise.
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/resources/
