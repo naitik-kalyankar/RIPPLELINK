@@ -24,6 +24,10 @@ use tauri_plugin_shell::ShellExt;
 const API_DATABASE_URL: &str = env!("RIPPLELINK_DATABASE_URL");
 const API_SUPABASE_URL: &str = "https://bpguykfkavdlzywwbbiq.supabase.co";
 const API_PORT: &str = "4000";
+// Neither of these is sensitive — a public API host and a public campaign id, same as what's
+// already visible on clipping.net itself — so no env!() indirection needed for these two.
+const API_CLIPPING_API_URL: &str = "https://clipping.net";
+const API_CLIPPING_CAMPAIGN_ID: &str = "6825752777a6ce103f6bdba0";
 
 struct ApiSidecar(std::sync::Mutex<Option<CommandChild>>);
 
@@ -48,6 +52,8 @@ fn spawn_api_sidecar(app: &tauri::AppHandle) {
         .env("SUPABASE_URL", API_SUPABASE_URL)
         .env("PORT", API_PORT)
         .env("CORS_ORIGIN", "tauri://localhost")
+        .env("CLIPPING_API_URL", API_CLIPPING_API_URL)
+        .env("CLIPPING_CAMPAIGN_ID", API_CLIPPING_CAMPAIGN_ID)
         .env("NODE_ENV", "production");
 
     if let Ok((_rx, child)) = command.spawn() {
