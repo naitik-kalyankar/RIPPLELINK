@@ -15,6 +15,7 @@ import { integrationsRoutes } from "./routes/integrations.js";
 import { adminRoutes } from "./routes/admin.js";
 import { payoutsRoutes } from "./routes/payouts.js";
 import { clippingBrowserManager } from "./services/clipping/ClippingBrowserManager.js";
+import { startPayoutSnapshotScheduler } from "./lib/payoutSnapshotScheduler.js";
 
 async function main() {
   const app = Fastify({ logger: true });
@@ -47,6 +48,7 @@ async function main() {
   });
 
   await app.listen({ port: env.port, host: "0.0.0.0" });
+  startPayoutSnapshotScheduler();
 }
 
 main().catch((error) => {

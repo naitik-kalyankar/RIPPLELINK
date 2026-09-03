@@ -481,6 +481,15 @@ class ClippingBrowserManager {
   private liveCheckCache = new Map<string, { ok: boolean; checkedAt: number }>();
   private static readonly LIVE_CHECK_TTL_MS = 20_000;
 
+  /** Cheap, synchronous, no browser/network involved — just "does a session file for this
+   * account exist on THIS machine's disk". Every RIPPLELINK user runs their own local apps/api
+   * (see main.rs's sidecar), so an account's storageStatePath only ever exists on whichever
+   * machine actually logged into it; this is what lets a background job skip accounts it has no
+   * way to reach instead of wasting a Playwright launch attempting one it can never succeed at. */
+  hasLocalSession(account: Pick<ClippingAccount, "storageStatePath">): boolean {
+    return fs.existsSync(storageStateAbsolutePath(account));
+  }
+
   /** Is this account ACTUALLY still signed in, as far as CLIPPING's own server is concerned —
    * not just "does a cookie file happen to still have a token in it". A locally-present cookie
    * that CLIPPING no longer honors (revoked, logged out from an opened window, etc.) now
