@@ -13,6 +13,11 @@ const RECHECK_INTERVAL_MS = 60 * 60 * 1000;
 // long enough to read, short enough not to linger as stale-looking state.
 const UP_TO_DATE_FLASH_MS = 2500;
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 type State =
   | { phase: "idle" }
   | { phase: "checking" }
@@ -168,19 +173,21 @@ export function UpdateButton({ alwaysExpanded = false }: { alwaysExpanded?: bool
         <DownloadCloud className={cn("h-4 w-4", installing && "animate-pulse")} aria-hidden="true" />
       </button>
 
-      <div className={cn("rounded-xl border border-primary/30 bg-primary/10 p-3", alwaysExpanded ? "block" : "hidden xl:block")}>
+      <div className={cn("rounded-xl border border-primary/30 bg-primary/10 p-2.5", alwaysExpanded ? "block" : "hidden xl:block")}>
         <div className="flex items-center gap-2">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary">
             <DownloadCloud className={cn("h-3.5 w-3.5", installing && "animate-pulse")} aria-hidden="true" />
           </span>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">
-              {installing ? `Installing v${state.version}…` : `Update available — v${state.version}`}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {installing ? (progressPct != null ? `${progressPct}% downloaded` : "Downloading…") : "Restarts the app once installed."}
-            </p>
-          </div>
+          {/* Just "Update available" + the version as a small badge, not one long line — the
+           * sidebar card (~200px of usable width at its widest) was truncating "Update available
+           * — v0.2.3" mid-word, and "Restarts the app once installed" as a second line on top of
+           * that was more than this card needs to say. */}
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+            {installing ? "Installing…" : "Update available"}
+          </span>
+          <span className="shrink-0 rounded-full bg-primary/20 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-primary">
+            v{state.version}
+          </span>
           {!installing && (
             <button
               type="button"
@@ -192,9 +199,19 @@ export function UpdateButton({ alwaysExpanded = false }: { alwaysExpanded?: bool
             </button>
           )}
         </div>
-        {installing && progressPct != null && (
-          <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-background/60">
-            <div className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out" style={{ width: `${progressPct}%` }} />
+        {installing && (
+          <div className="mt-2.5">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-background/60">
+              <div
+                className={cn("h-full rounded-full bg-primary", progressPct != null ? "transition-[width] duration-300 ease-out" : "w-1/3 animate-pulse")}
+                style={progressPct != null ? { width: `${progressPct}%` } : undefined}
+              />
+            </div>
+            <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
+              {formatBytes(state.downloadedBytes)}
+              {state.totalBytes != null ? ` / ${formatBytes(state.totalBytes)}` : ""}
+              {progressPct != null ? ` · ${progressPct}%` : ""}
+            </p>
           </div>
         )}
         {!installing && (
