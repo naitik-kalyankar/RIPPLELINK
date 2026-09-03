@@ -391,24 +391,30 @@ export async function clippingAccountsRoutes(app: FastifyInstance) {
           const existing = await prisma.clippingAccount.findFirst({
             where: { email: { equals: email, mode: "insensitive" } },
           });
-          if (existing && existing.userId !== userId) {
-            clippingBrowserManager.setLoginError(id, "This CLIPPING account is already linked to another RIPPLELINK user.");
-            clippingBrowserManager.markLoginSettled(id);
-            await activityLogService.log(userId, `Sign-in rejected — ${email} is already linked to another user.`, "warning");
-            return;
-          }
+          // Still actively held by someone (self or another user) — genuinely blocked either
+          // way, same as before.
           if (existing && existing.active) {
-            clippingBrowserManager.setLoginError(id, `Already linked as "${existing.label}" — sign in with a different CLIPPING account.`);
+            const message =
+              existing.userId === userId
+                ? `Already linked as "${existing.label}" — sign in with a different CLIPPING account.`
+                : "This CLIPPING account is already linked to another RIPPLELINK user.";
+            clippingBrowserManager.setLoginError(id, message);
             clippingBrowserManager.markLoginSettled(id);
-            await activityLogService.log(userId, `Sign-in rejected — ${email} is already linked as "${existing.label}".`, "warning");
+            await activityLogService.log(userId, `Sign-in rejected — ${email} is already linked (${existing.userId === userId ? "self" : "another user"}).`, "warning");
             return;
           }
           if (existing) {
-            // A previously removed account for this same email — reactivate that row instead
-            // of creating a new one (the email column can only ever hold one row for it).
+            // A previously REMOVED account for this email, whoever it used to belong to —
+            // reactivate that row instead of creating a new one (the email column can only ever
+            // hold one row for it) and transfer ownership to whoever is claiming it now. Without
+            // the userId reassignment here, "remove" was permanent for every OTHER RIPPLELINK
+            // user forever — the unique-email row stayed inactive under its original owner, so
+            // no one else could ever link that same CLIPPING account again even though removing
+            // it is supposed to free it up, not just hide it from the person who removed it.
             account = await prisma.clippingAccount.update({
               where: { id: existing.id },
               data: {
+                userId,
                 active: true,
                 label: displayName ?? existing.label,
                 avatarUrl,
