@@ -60,11 +60,20 @@ export async function adminRoutes(app: FastifyInstance) {
   // same computation the owner's own Payout page runs), just fanned out across every user's
   // accounts instead of one user's.
   //
-  // Persisted, not just live: a fresh successful fetch overwrites lastAdminPayoutSnapshot, but a
-  // failed one (dead session, network blip, CLIPPING briefly down) never clears it — the row
-  // falls back to whatever was last known good instead of blanking to zero, and `stale: true`
-  // + `fetchedAt` tell the admin how old what they're looking at actually is.
-  app.get("/api/admin/payouts", async () => {
+  // Two modes, both under this one route:
+  //  - Plain GET (page load): reads whatever's already stored, no Playwright involved at all —
+  //    was previously a live fetch across EVERY account on every page load/revisit, launching a
+  //    Playwright context per account all at once. That's what a "Refresh" button is for now
+  //    instead — opening the page should be instant and free, not kick off a small stampede.
+  //  - GET ?refresh=true (the button): the real live fetch, unchanged from before. A fresh
+  //    successful result overwrites lastAdminPayoutSnapshot; a failed one (dead session, network
+  //    blip, CLIPPING briefly down, or a mock/placeholder result — see computeAccountPayments)
+  //    never clears it, falling back to whatever was last known-good instead of blanking to
+  //    zero or showing fabricated numbers. `stale`/`fetchedAt`/`error` say how old/why.
+  app.get("/api/admin/payouts", async (request) => {
+    const { refresh } = request.query as { refresh?: string };
+    const live = refresh === "true";
+
     const accounts = await prisma.clippingAccount.findMany({
       where: { active: true },
       orderBy: { createdAt: "asc" },
@@ -74,6 +83,26 @@ export async function adminRoutes(app: FastifyInstance) {
       select: { id: true, email: true, displayName: true },
     });
     const ownerById = new Map(profiles.map((p) => [p.id, p]));
+
+    const buildFromCache = (account: (typeof accounts)[number], base: Record<string, unknown>, error: string | null) => {
+      const cached = account.lastAdminPayoutSnapshot as unknown as AdminPayoutSnapshot | null;
+      if (cached) {
+        return { ...base, ...cached, stale: true, fetchedAt: account.lastAdminPayoutSnapshotAt?.toISOString() ?? null, error };
+      }
+      // Never successfully fetched even once — nothing to fall back to.
+      return {
+        ...base,
+        pendingEstimate: null,
+        paidTotal: 0,
+        pendingTotal: 0,
+        paymentMethod: null,
+        history: [],
+        mock: false,
+        stale: true,
+        fetchedAt: null,
+        error,
+      };
+    };
 
     const items = await Promise.all(
       accounts.map(async (account) => {
@@ -86,6 +115,8 @@ export async function adminRoutes(app: FastifyInstance) {
           ownerEmail: owner?.email ?? null,
           ownerDisplayName: owner?.displayName ?? null,
         };
+
+        if (!live) return buildFromCache(account, base, null);
 
         try {
           const payments = await computeAccountPayments(account);
@@ -113,29 +144,7 @@ export async function adminRoutes(app: FastifyInstance) {
           return { ...base, ...snapshot, stale: false, fetchedAt: fetchedAt.toISOString(), error: null as string | null };
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to read payments.";
-          const cached = account.lastAdminPayoutSnapshot as unknown as AdminPayoutSnapshot | null;
-          if (cached) {
-            return {
-              ...base,
-              ...cached,
-              stale: true,
-              fetchedAt: account.lastAdminPayoutSnapshotAt?.toISOString() ?? null,
-              error: message,
-            };
-          }
-          // Never successfully fetched even once — nothing to fall back to.
-          return {
-            ...base,
-            pendingEstimate: null,
-            paidTotal: 0,
-            pendingTotal: 0,
-            paymentMethod: null,
-            history: [],
-            mock: false,
-            stale: true,
-            fetchedAt: null,
-            error: message,
-          };
+          return buildFromCache(account, base, message);
         }
       })
     );

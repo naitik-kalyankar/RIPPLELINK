@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/apiClient";
 import type { PaymentEntry, PayoutPaymentMethod } from "@/api/payouts";
 
@@ -28,10 +28,27 @@ export interface AdminPayoutsResponse {
   totals: { pendingEstimate: number; paidTotal: number; pendingTotal: number };
 }
 
+// Cached-only — no Playwright involved, just whatever's already stored (see routes/admin.ts).
+// Opening this page used to itself trigger a live fetch across EVERY active account at once
+// (one Playwright context per account, all simultaneously), which is exactly what starved the
+// shared database connection pool. Loading the page is now instant and free; useRefreshAdminPayouts
+// below is the explicit "go get fresh numbers" action.
 export function useAdminPayouts() {
   return useQuery({
     queryKey: ["admin", "payouts"],
     queryFn: () => apiClient.get<AdminPayoutsResponse>("/api/admin/payouts"),
     staleTime: 60_000,
+  });
+}
+
+// The live fetch — same one this route always did, just moved behind an explicit action (the
+// page's "Refresh" button) instead of running automatically on every load/revisit.
+export function useRefreshAdminPayouts() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.get<AdminPayoutsResponse>("/api/admin/payouts?refresh=true"),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["admin", "payouts"], data);
+    },
   });
 }

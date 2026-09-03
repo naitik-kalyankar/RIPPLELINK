@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Loader2, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAdminPayouts, type AdminPayoutEntry } from "@/api/admin";
+import { useAdminPayouts, useRefreshAdminPayouts, type AdminPayoutEntry } from "@/api/admin";
 import { formatCurrency, formatDate, formatRelativeTime } from "@/lib/utils";
 
 const PAYMENT_METHOD_LABEL: Record<string, string> = {
@@ -114,15 +115,33 @@ function PayoutRow({ item }: { item: AdminPayoutEntry }) {
 
 export function AdminPayoutsPage() {
   const { data, isLoading, isError } = useAdminPayouts();
+  const refresh = useRefreshAdminPayouts();
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Admin — Payouts</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Every active CLIPPING account across every RIPPLELINK user, in one place.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Admin — Payouts</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Every active CLIPPING account across every RIPPLELINK user, in one place.
+          </p>
+        </div>
+        {/* Loading the page itself only ever reads what's already stored — this is the one thing
+         * that actually goes and asks CLIPPING for fresh numbers, launching a Playwright context
+         * per reachable account. Explicit and on-demand instead of firing automatically on every
+         * page visit, which used to be exactly what could exhaust the shared DB connection pool. */}
+        <Button size="sm" variant="outline" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+          {refresh.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          {refresh.isPending ? "Refreshing…" : "Refresh"}
+        </Button>
       </div>
+
+      {refresh.isError && (
+        <div className="flex items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          {refresh.error instanceof Error ? refresh.error.message : "Couldn't refresh payout data."}
+        </div>
+      )}
 
       {isError && (
         <div className="flex items-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
