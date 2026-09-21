@@ -23,15 +23,40 @@ use tauri_plugin_shell::ShellExt;
 // not to pretend it can't happen.
 const API_DATABASE_URL: &str = env!("RIPPLELINK_DATABASE_URL");
 const API_SUPABASE_URL: &str = "https://bpguykfkavdlzywwbbiq.supabase.co";
-const API_PORT: &str = "4000";
+// Preferred port; if another app already holds it, pick a free one instead (see pick_api_port).
+const API_PREFERRED_PORT: u16 = 4000;
 // Neither of these is sensitive — a public API host and a public campaign id, same as what's
 // already visible on clipping.net itself — so no env!() indirection needed for these two.
 const API_CLIPPING_API_URL: &str = "https://clipping.net";
 const API_CLIPPING_CAMPAIGN_ID: &str = "6825752777a6ce103f6bdba0";
 
 struct ApiSidecar(std::sync::Mutex<Option<CommandChild>>);
+struct ApiPort(u16);
 
-fn spawn_api_sidecar(app: &tauri::AppHandle) {
+// The sidecar listens on 0.0.0.0, so probe that same address — a 127.0.0.1-only probe can succeed
+// while another app's wildcard listener still owns the port.
+fn port_is_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
+// Port 4000 is popular with other dev tools; if it is taken, let the OS hand out a free one
+// rather than leaving the backend dead. The webview learns the choice via the `api_url` command.
+fn pick_api_port() -> u16 {
+    if port_is_free(API_PREFERRED_PORT) {
+        return API_PREFERRED_PORT;
+    }
+    std::net::TcpListener::bind(("0.0.0.0", 0))
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .unwrap_or(API_PREFERRED_PORT)
+}
+
+#[tauri::command]
+fn api_url(port: tauri::State<'_, ApiPort>) -> String {
+    format!("http://localhost:{}", port.0)
+}
+
+fn spawn_api_sidecar(app: &tauri::AppHandle, port: u16) {
     let resource_dir = match app.path().resource_dir() {
         Ok(dir) => dir,
         Err(_) => return,
@@ -60,7 +85,7 @@ fn spawn_api_sidecar(app: &tauri::AppHandle) {
         .args([server_path_str])
         .env("DATABASE_URL", API_DATABASE_URL)
         .env("SUPABASE_URL", API_SUPABASE_URL)
-        .env("PORT", API_PORT)
+        .env("PORT", port.to_string())
         .env("CORS_ORIGIN", "tauri://localhost")
         .env("CLIPPING_API_URL", API_CLIPPING_API_URL)
         .env("CLIPPING_CAMPAIGN_ID", API_CLIPPING_CAMPAIGN_ID)
@@ -83,8 +108,11 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(ApiSidecar(std::sync::Mutex::new(None)))
+        .manage(ApiPort(pick_api_port()))
+        .invoke_handler(tauri::generate_handler![api_url])
         .setup(|app| {
-            spawn_api_sidecar(&app.handle());
+            let port = app.state::<ApiPort>().0;
+            spawn_api_sidecar(&app.handle(), port);
             Ok(())
         })
         .build(tauri::generate_context!())

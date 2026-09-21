@@ -22,6 +22,7 @@ import {
 import { useClippingScope } from "@/lib/clippingScope";
 import { DEFAULT_CLIPPING_CAMPAIGN_ID, useDefaultClippingCampaignId } from "@/lib/clippingCampaignDefault";
 import { useAuth } from "@/lib/auth";
+import { resolveApiUrl } from "@/lib/apiClient";
 import { AddClippingAccountModal } from "@/components/instagram/AddClippingAccountModal";
 import { useToast } from "@/components/ui/toast";
 import { cn, formatCurrency, formatRelativeTime } from "@/lib/utils";
@@ -304,6 +305,10 @@ function AdvancedSection() {
   const [expanded, setExpanded] = useState(false);
   const [platformKind, setPlatformKind] = useState<string>("…");
   const [appVersion, setAppVersion] = useState<string>("…");
+  const [apiUrl, setApiUrl] = useState<string>("…");
+  useEffect(() => {
+    resolveApiUrl().then(setApiUrl);
+  }, []);
 
   useEffect(() => {
     getPlatform().then(async (platform) => {
@@ -335,7 +340,7 @@ function AdvancedSection() {
             </div>
             <div className="flex items-center justify-between">
               <span>API endpoint</span>
-              <span className="font-mono">{import.meta.env.VITE_API_URL ?? "http://localhost:4000"}</span>
+              <span className="font-mono">{apiUrl}</span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2 border-t border-border/60 pt-3">

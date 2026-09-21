@@ -4,7 +4,20 @@ import { supabase } from "@/lib/supabaseClient";
 // ever open on whichever machine is running it, so every RIPPLELINK install needs its OWN local
 // apps/api (see apps/api/README or ask Naitik for setup help), not one shared instance. They all
 // point at the same Supabase database regardless, so accounts/Reels stay unified either way.
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+const DEFAULT_API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+
+// In the desktop app the bundled backend may not be on 4000 (another app can already hold it), so
+// ask the shell which port it actually picked. Resolved once; browser builds keep the default.
+let apiUrlPromise: Promise<string> | null = null;
+export function resolveApiUrl(): Promise<string> {
+  if (!apiUrlPromise) {
+    apiUrlPromise =
+      typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+        ? import("@tauri-apps/api/core").then(({ invoke }) => invoke<string>("api_url")).catch(() => DEFAULT_API_URL)
+        : Promise.resolve(DEFAULT_API_URL);
+  }
+  return apiUrlPromise;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -24,9 +37,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const accessToken = data.session?.access_token;
 
+  const apiUrl = await resolveApiUrl();
   let response: Response;
   try {
-    response = await fetch(`${API_URL}${path}`, {
+    response = await fetch(`${apiUrl}${path}`, {
       ...init,
       // Fastify's default JSON parser rejects an empty body sent with Content-Type:
       // application/json (FST_ERR_CTP_EMPTY_JSON_BODY) — only set the header when there's
