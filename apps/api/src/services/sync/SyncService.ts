@@ -107,18 +107,22 @@ export class SyncService {
     let detected = 0;
     const errors: string[] = [];
 
-    for (const account of accounts) {
-      try {
-        const result = await this.syncAccount(userId, account);
-        fetched += result.fetched;
-        upserted += result.upserted;
-        detected += result.detected;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown Instagram sync error.";
-        errors.push(`@${account.username}: ${message}`);
-        await activityLogService.log(userId, `Instagram sync failed for @${account.username}: ${message}`, "error");
-      }
-    }
+    // Independent per-account work (own Instagram API calls, own Reel rows) — nothing here is
+    // shared across accounts, so run every account's sync concurrently rather than one at a time.
+    await Promise.all(
+      accounts.map(async (account) => {
+        try {
+          const result = await this.syncAccount(userId, account);
+          fetched += result.fetched;
+          upserted += result.upserted;
+          detected += result.detected;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown Instagram sync error.";
+          errors.push(`@${account.username}: ${message}`);
+          await activityLogService.log(userId, `Instagram sync failed for @${account.username}: ${message}`, "error");
+        }
+      })
+    );
 
     return { instagramReelsFetched: fetched, instagramReelsUpserted: upserted, creatorsDetected: detected, errors };
   }
@@ -132,24 +136,32 @@ export class SyncService {
     const accounts = await prisma.clippingAccount.findMany({ where: { active: true, userId } });
     const collected: ClippingSubmissionRaw[] = [];
 
-    for (const account of accounts) {
-      try {
-        const clips = await getClippingProviderForAccount(account).getUploadedClips();
-        collected.push(...clips);
-        await prisma.clippingAccount.update({ where: { id: account.id }, data: { lastUsedAt: new Date() } });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown CLIPPING sync error.";
-        errors.push(`${account.label}: ${message}`);
-        await activityLogService.log(userId, `CLIPPING sync failed for ${account.label}: ${message}`, "error");
-      }
+    // Each ClippingAccount runs through its own isolated Playwright BrowserContext (see
+    // ClippingBrowserManager.getContext, keyed by account.id) with no shared mutable state
+    // between accounts, so there's nothing serial about doing this one account at a time —
+    // it was just an artifact of the original for-loop. Running every account's fetch (clips +
+    // payout scrape) concurrently is what actually cuts wall-clock time on a multi-account sync,
+    // since each account's own work is dominated by network/page-load latency, not CPU.
+    await Promise.all(
+      accounts.map(async (account) => {
+        try {
+          const clips = await getClippingProviderForAccount(account).getUploadedClips();
+          collected.push(...clips);
+          await prisma.clippingAccount.update({ where: { id: account.id }, data: { lastUsedAt: new Date() } });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown CLIPPING sync error.";
+          errors.push(`${account.label}: ${message}`);
+          await activityLogService.log(userId, `CLIPPING sync failed for ${account.label}: ${message}`, "error");
+        }
 
-      // Separate error list on purpose: a payout-scrape failure (a different Playwright page
-      // load, not the cookie-based HTTP API used for clips above) must never gate the
-      // stale-submission cleanup below, which only cares about clip-fetch completeness — those
-      // are unrelated concerns, so coupling them would make a flaky payout scrape silently
-      // stop real cleanup from ever running.
-      await this.syncPayoutForAccount(userId, account, payoutErrors);
-    }
+        // Separate error list on purpose: a payout-scrape failure (a different Playwright page
+        // load, not the cookie-based HTTP API used for clips above) must never gate the
+        // stale-submission cleanup below, which only cares about clip-fetch completeness — those
+        // are unrelated concerns, so coupling them would make a flaky payout scrape silently
+        // stop real cleanup from ever running.
+        await this.syncPayoutForAccount(userId, account, payoutErrors);
+      })
+    );
     return collected;
   }
 
