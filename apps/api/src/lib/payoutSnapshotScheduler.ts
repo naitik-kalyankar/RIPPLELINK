@@ -31,7 +31,24 @@ async function refreshOne(account: ClippingAccount): Promise<void> {
   if (!clippingBrowserManager.hasLocalSession(account)) return;
 
   try {
-    const payments = await computeAccountPayments(account);
+    // computeAccountPayments reads the pending estimate from ClippingAccount.lastPayout, which
+    // otherwise only gets written during a full sync — so an account whose sync never succeeded
+    // (or whose owner never syncs) would look like mock data forever and never get a snapshot.
+    // Refresh it here directly so the background job is self-sufficient.
+    const { clipperStats } = await clippingBrowserManager.getCampaignPageData(account);
+    let fresh = account;
+    if (clipperStats) {
+      fresh = await prisma.clippingAccount.update({
+        where: { id: account.id },
+        data: {
+          lastPayout: clipperStats.totalPayout,
+          lastPayoutBountyBreakdown: clipperStats.bountyBreakdown as unknown as Prisma.InputJsonValue,
+          lastPayoutFetchedAt: new Date(),
+        },
+      });
+    }
+
+    const payments = await computeAccountPayments(fresh);
     // Mock is fabricated placeholder data (see computeAccountPayments), never a genuine result —
     // skip the write entirely rather than let a background refresh silently overwrite real
     // stored numbers with invented ones. Same reasoning as the admin route's own guard.
@@ -49,9 +66,8 @@ async function refreshOne(account: ClippingAccount): Promise<void> {
       data: { lastAdminPayoutSnapshot: snapshot as unknown as Prisma.InputJsonValue, lastAdminPayoutSnapshotAt: new Date() },
     });
   } catch {
-    // Same fallback behavior as the admin route itself: a failed refresh (dead session, CLIPPING
-    // briefly down, network blip) just leaves whatever was last known-good in place rather than
-    // clearing it — nothing to do here, the next interval tries again.
+    // Deliberately silent — no log, no activity entry, nothing a user or admin can see. A failed
+    // refresh just leaves whatever was last known-good in place; the next interval tries again.
   }
 }
 

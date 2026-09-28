@@ -132,7 +132,7 @@ export class SyncService {
    * exists). The old extension-cookie-driven global singleton (CLIPPING_SESSION_COOKIE) is
    * never fetched here anymore — it's not tied to any real logged-in session, so it only ever
    * produced a stale "session expired" error on every sync tick. */
-  private async fetchAllClips(userId: string, errors: string[], payoutErrors: string[]): Promise<ClippingSubmissionRaw[]> {
+  private async fetchAllClips(userId: string, errors: string[]): Promise<ClippingSubmissionRaw[]> {
     const accounts = await prisma.clippingAccount.findMany({ where: { active: true, userId } });
     const collected: ClippingSubmissionRaw[] = [];
 
@@ -159,7 +159,7 @@ export class SyncService {
         // stale-submission cleanup below, which only cares about clip-fetch completeness — those
         // are unrelated concerns, so coupling them would make a flaky payout scrape silently
         // stop real cleanup from ever running.
-        await this.syncPayoutForAccount(userId, account, payoutErrors);
+        await this.syncPayoutForAccount(userId, account);
       })
     );
     return collected;
@@ -169,7 +169,7 @@ export class SyncService {
    * campaign page — see ClippingBrowserManager.getCampaignPageData. This is what makes the
    * dashboard's "CLIPPING" payout mode match clipping.net exactly instead of a local estimate
    * that doesn't replicate CLIPPING's per-bounty-aggregate view floor. */
-  private async syncPayoutForAccount(userId: string, account: ClippingAccount, errors: string[]): Promise<void> {
+  private async syncPayoutForAccount(userId: string, account: ClippingAccount): Promise<void> {
     try {
       const { clipperStats, campaign } = await clippingBrowserManager.getCampaignPageData(account);
       // The live, authoritative source now — previously this only ever got refreshed by
@@ -177,10 +177,7 @@ export class SyncService {
       // kept as a fallback). A name this app detects locally that isn't in this list is exactly
       // what "not in CLIPPING's bounty list" means to the Link-Reel flow.
       if (campaign?.bounties) {
-        await upsertBounties(userId, campaign.bounties).catch(async (error) => {
-          const message = error instanceof Error ? error.message : "Unknown error.";
-          await activityLogService.log(userId, `Bounty list sync failed for ${account.label}: ${message}`, "error");
-        });
+        await upsertBounties(userId, campaign.bounties).catch(() => {});
       }
       if (!clipperStats) return; // no session yet, or the page didn't render clipperStats — leave cached value as-is
       await prisma.clippingAccount.update({
@@ -191,10 +188,9 @@ export class SyncService {
           lastPayoutFetchedAt: new Date(),
         },
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error.";
-      errors.push(`${account.label} (payout): ${message}`);
-      await activityLogService.log(userId, `CLIPPING payout sync failed for ${account.label}: ${message}`, "error");
+    } catch {
+      // Deliberately silent: a payout-scrape failure never reaches the activity feed or the sync
+      // result — the last known payout stays in place and the next sync/scheduler tick retries.
     }
 
     // Backfills a missing avatar (accounts connected before this existed, or whose scrape came
@@ -218,13 +214,12 @@ export class SyncService {
     Pick<SyncResult, "clippingSubmissionsFetched" | "clippingSubmissionsUpserted" | "newlyLinked" | "newlyUnlinked" | "errors">
   > {
     const errors: string[] = [];
-    const payoutErrors: string[] = [];
     let fetched = 0;
     let upserted = 0;
     let removedStale = 0;
 
     try {
-      const clips = await this.fetchAllClips(userId, errors, payoutErrors);
+      const clips = await this.fetchAllClips(userId, errors);
       fetched = clips.length;
 
       for (const clip of clips) {
@@ -319,7 +314,7 @@ export class SyncService {
       clippingSubmissionsUpserted: upserted,
       newlyLinked,
       newlyUnlinked: removedStale,
-      errors: [...errors, ...payoutErrors],
+      errors,
     };
   }
 

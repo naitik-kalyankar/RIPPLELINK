@@ -59,6 +59,7 @@ function AccountHistoryTable({ history }: { history: AdminPayoutEntry["history"]
 
 function PayoutRow({ item }: { item: AdminPayoutEntry }) {
   const [expanded, setExpanded] = useState(false);
+  const neverSynced = !item.fetchedAt;
   return (
     <>
       <tr className="border-b border-border/60 last:border-0">
@@ -73,11 +74,21 @@ function PayoutRow({ item }: { item: AdminPayoutEntry }) {
         <td className="px-3 py-2.5 text-xs text-muted-foreground">
           {item.paymentMethod ? (PAYMENT_METHOD_LABEL[item.paymentMethod.type] ?? item.paymentMethod.type) : "—"}
         </td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{item.pendingEstimate != null ? formatCurrency(item.pendingEstimate) : "—"}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrency(item.paidTotal)}</td>
-        <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrency(item.pendingTotal)}</td>
+        <td className="px-3 py-2.5 text-right tabular-nums">
+          {neverSynced || item.pendingEstimate == null ? "—" : formatCurrency(item.pendingEstimate)}
+        </td>
+        <td className="px-3 py-2.5 text-right tabular-nums">{neverSynced ? "—" : formatCurrency(item.paidTotal)}</td>
+        <td className="px-3 py-2.5 text-right tabular-nums">{neverSynced ? "—" : formatCurrency(item.pendingTotal)}</td>
         <td className="px-3 py-2.5">
-          {item.error && item.stale && item.fetchedAt ? (
+          {neverSynced ? (
+            <Badge
+              variant="outline"
+              className="text-muted-foreground"
+              title="This account's owner hasn't synced payout data yet — numbers appear once their app fetches them."
+            >
+              Not synced yet
+            </Badge>
+          ) : item.error && item.stale && item.fetchedAt ? (
             <Badge variant="warning" title={`${item.error} — showing the last successful fetch, ${formatRelativeTime(item.fetchedAt)}.`}>
               Stale
             </Badge>
@@ -90,6 +101,11 @@ function PayoutRow({ item }: { item: AdminPayoutEntry }) {
               Mock
             </Badge>
           ) : null}
+          {item.fetchedAt && (
+            <p className="mt-1 whitespace-nowrap text-[11px] text-muted-foreground">
+              Updated {formatRelativeTime(item.fetchedAt)}
+            </p>
+          )}
         </td>
         <td className="px-3 py-2.5 text-right">
           <button
